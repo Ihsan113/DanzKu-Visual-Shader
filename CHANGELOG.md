@@ -59,3 +59,10 @@ Previous V5.2.20 behavior remains the fallback when the output-stage guard is no
 - Added Adaptive Texture Enhancement control.
 - Added HDR Enhancement (SDR/HDR-like tone/detail enhancement; not a display-mode HDR switch).
 - Added APK controls for all five features.
+
+## V5.2.26 Target App Manager
+- Added `module/config/targets.conf` for APK-managed target package selection.
+- Zygisk target detection now matches the base package before `:` and derives the per-app files/report directory dynamically.
+- Monitor APK now lists launchable installed apps and lets the user enable or disable DanzKu per package.
+- Existing Mobile Legends targeting remains the fallback/default for backward compatibility.
+- Target changes take effect when the target app is restarted.

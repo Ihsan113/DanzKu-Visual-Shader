@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # DanzKu Visual Shader V5.2.26
-# Root-side config bridge only. No GPU, SurfaceFlinger, HWC, or performance tweaks.
+# Root-side config bridge and target-list bootstrap only. No GPU, SurfaceFlinger, HWC, or performance tweaks.
 CONF="/data/adb/modules/danzku_visual_shader/config/visual.conf"
 BRIDGE="/data/local/tmp/danzku_visual_config"
 rm -f /data/local/tmp/danzku_visual_engine /data/local/tmp/danzku_visual_config.tmp

@@ -6,6 +6,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.provider.Settings;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
@@ -40,6 +42,7 @@ public class MainActivity extends Activity {
     final String CONF = "/data/adb/modules/danzku_visual_shader/config/visual.conf";
     final String CONTROL = "/data/local/tmp/danzku_visual_engine";
     final String CONFIG_BRIDGE = "/data/local/tmp/danzku_visual_config";
+    final String TARGETS = "/data/adb/modules/danzku_visual_shader/config/targets.conf";
     final String REPORT_DIR = "/data/user/0/com.mobile.legends/files";
     boolean diagRoot=false, diagPid=false, diagReport=false, diagRead=false, diagPidMatch=false, diagStage=false;
     String diagError="";
@@ -180,6 +183,12 @@ public class MainActivity extends Activity {
         root.addView(status);
 
         addMasterSwitch();
+
+        Button targets = new Button(this);
+        targets.setText("TARGET APPS / PACKAGE LIST");
+        targets.setMinHeight(dp(60));
+        targets.setOnClickListener(v -> showTargetAppsDialog());
+        root.addView(targets);
         addToggle("RAM Optimization", "ram_optimization");
         addToggle("FPS Boost", "fps_boost");
         addToggle("Frame Buffer Optimization", "frame_buffer_optimization");
@@ -234,6 +243,120 @@ public class MainActivity extends Activity {
         setContentView(sv);
     }
 
+
+    static class TargetApp {
+        String label;
+        String packageName;
+        TargetApp(String l, String p) { label = l; packageName = p; }
+    }
+
+    ArrayList<TargetApp> installedLaunchableApps() {
+        ArrayList<TargetApp> apps = new ArrayList<>();
+        try {
+            PackageManager pm = getPackageManager();
+            Intent launch = new Intent(Intent.ACTION_MAIN);
+            launch.addCategory(Intent.CATEGORY_LAUNCHER);
+            List<ResolveInfo> infos = pm.queryIntentActivities(launch, PackageManager.MATCH_ALL);
+            HashSet<String> seen = new HashSet<>();
+            for (ResolveInfo ri : infos) {
+                if (ri == null || ri.activityInfo == null) continue;
+                String pkg = ri.activityInfo.packageName;
+                if (pkg == null || pkg.length() == 0 || !seen.add(pkg)) continue;
+                CharSequence labelCs = ri.loadLabel(pm);
+                String label = labelCs == null ? pkg : labelCs.toString();
+                apps.add(new TargetApp(label, pkg));
+            }
+            Collections.sort(apps, (a, b) -> {
+                int c = a.label.compareToIgnoreCase(b.label);
+                return c != 0 ? c : a.packageName.compareToIgnoreCase(b.packageName);
+            });
+        } catch (Exception ignored) {}
+        return apps;
+    }
+
+    HashSet<String> readTargetPackages() {
+        HashSet<String> out = new HashSet<>();
+        String text = su("cat \"" + TARGETS + "\" 2>/dev/null");
+        if (text == null) text = "";
+        for (String line : text.split("\n")) {
+            line = line.trim();
+            if (line.length() == 0 || line.startsWith("#")) continue;
+            int hash = line.indexOf('#');
+            if (hash >= 0) line = line.substring(0, hash).trim();
+            if (line.matches("[A-Za-z0-9_\\.]+")) out.add(line);
+        }
+        if (out.isEmpty()) out.add("com.mobile.legends");
+        return out;
+    }
+
+    void writeTargetPackages(Set<String> packages) {
+        ArrayList<String> sorted = new ArrayList<>(packages);
+        Collections.sort(sorted, String.CASE_INSENSITIVE_ORDER);
+        StringBuilder text = new StringBuilder();
+        text.append("# DanzKu target packages. One Android package per line.\n");
+        text.append("# Managed by DanzKu Monitor APK.\n");
+        for (String pkg : sorted) {
+            if (pkg != null && pkg.matches("[A-Za-z0-9_\\.]+")) text.append(pkg).append('\n');
+        }
+        String encoded = Base64.encodeToString(
+                text.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                Base64.NO_WRAP);
+        String cmd = "mkdir -p \"$(dirname \"" + TARGETS + "\")\" && " +
+                "printf '%s' '" + encoded + "' | toybox base64 -d > \"" + TARGETS + ".tmp\" && " +
+                "chmod 0644 \"" + TARGETS + ".tmp\" && mv \"" + TARGETS + ".tmp\" \"" + TARGETS + "\"";
+        su(cmd);
+    }
+
+    void showTargetAppsDialog() {
+        ioExecutor.execute(() -> {
+            HashSet<String> selected = readTargetPackages();
+            ArrayList<TargetApp> apps = installedLaunchableApps();
+            runOnUiThread(() -> {
+                if (apps.isEmpty()) {
+                    Toast.makeText(MainActivity.this, "Tidak menemukan aplikasi yang bisa diluncurkan.", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                String[] labels = new String[apps.size()];
+                boolean[] checked = new boolean[apps.size()];
+                for (int i = 0; i < apps.size(); ++i) {
+                    TargetApp app = apps.get(i);
+                    labels[i] = app.label + "\n" + app.packageName;
+                    checked[i] = selected.contains(app.packageName);
+                }
+
+                AlertDialog dialog = new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("DANZKU TARGET APPS")
+                        .setMultiChoiceItems(labels, checked, (d, which, isChecked) -> {
+                            if (isChecked) selected.add(apps.get(which).packageName);
+                            else selected.remove(apps.get(which).packageName);
+                        })
+                        .setNegativeButton("BATAL", null)
+                        .setPositiveButton("SIMPAN", null)
+                        .create();
+
+                dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                    if (selected.isEmpty()) {
+                        new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("Target kosong")
+                                .setMessage("Pilih minimal satu aplikasi agar DanzKu tetap punya target.")
+                                .setPositiveButton("OK", null)
+                                .show();
+                        return;
+                    }
+                    ioExecutor.execute(() -> {
+                        writeTargetPackages(selected);
+                        runOnUiThread(() -> {
+                            dialog.dismiss();
+                            Toast.makeText(MainActivity.this,
+                                    "Target tersimpan. Tutup & buka ulang game agar target baru aktif.",
+                                    Toast.LENGTH_LONG).show();
+                        });
+                    });
+                }));
+                dialog.show();
+            });
+        });
+    }
 
     void addSaturationControl() {
         LinearLayout box = new LinearLayout(this);

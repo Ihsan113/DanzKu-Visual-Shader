@@ -28,6 +28,48 @@ static JNIEnv* g_env = nullptr;
 static bool g_target = false;
 static pthread_t g_thread{};
 static std::string g_app_files_dir = "/data/user/0/com.mobile.legends/files";
+static std::string g_target_name = "com.mobile.legends:UnityKillsMe";
+static const char* kTargetConfigPath = "/data/adb/modules/danzku_visual_shader/config/targets.conf";
+
+static std::string trim_copy(const std::string& in) {
+    size_t a = 0;
+    while (a < in.size() && (in[a] == ' ' || in[a] == '\t' || in[a] == '\r' || in[a] == '\n')) ++a;
+    size_t b = in.size();
+    while (b > a && (in[b - 1] == ' ' || in[b - 1] == '\t' || in[b - 1] == '\r' || in[b - 1] == '\n')) --b;
+    return in.substr(a, b - a);
+}
+
+static std::string base_package_name(const std::string& process_name) {
+    const size_t colon = process_name.find(':');
+    return colon == std::string::npos ? process_name : process_name.substr(0, colon);
+}
+
+static bool target_package_enabled(const std::string& package_name) {
+    int fd = open(kTargetConfigPath, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return package_name == "com.mobile.legends";
+
+    char buf[8192] = {};
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return package_name == "com.mobile.legends";
+    buf[n] = '\0';
+
+    std::string text(buf, static_cast<size_t>(n));
+    size_t start = 0;
+    while (start <= text.size()) {
+        size_t end = text.find('\n', start);
+        if (end == std::string::npos) end = text.size();
+        std::string line = trim_copy(text.substr(start, end - start));
+        if (!line.empty() && line[0] != '#') {
+            const size_t comment = line.find('#');
+            if (comment != std::string::npos) line = trim_copy(line.substr(0, comment));
+            if (line == package_name) return true;
+        }
+        if (end == text.size()) break;
+        start = end + 1;
+    }
+    return false;
+}
 
 static std::string jstring_to_string(jstring value) {
     if (!value || !g_env) return "(null)";
@@ -1818,11 +1860,22 @@ static bool v27_process_frame(EGLSurface surface) {
     // no longer needed by DanzKu. This is a tile-memory/buffer-lifecycle hint;
     // it does not change the pixels presented or the persistent temporal history.
     if (g_v6_frame_buffer_optimization_value && g_v27_fbo) {
-        const GLenum transientAttachments[] = { GL_COLOR_ATTACHMENT0 };
-        glBindFramebuffer(GL_FRAMEBUFFER, g_v27_fbo);
-        glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, transientAttachments);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(old_read_fbo));
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(old_draw_fbo));
+        // Resolve glInvalidateFramebuffer at runtime instead of linking against
+        // the symbol directly. Some Android GLES implementations expose the
+        // entry point through EGL but do not export it as a link-time symbol.
+        using InvalidateFramebufferProc =
+            void (*)(GLenum target, GLsizei numAttachments, const GLenum* attachments);
+        static InvalidateFramebufferProc invalidate_framebuffer =
+            reinterpret_cast<InvalidateFramebufferProc>(
+                eglGetProcAddress("glInvalidateFramebuffer"));
+
+        if (invalidate_framebuffer) {
+            const GLenum transientAttachments[] = { GL_COLOR_ATTACHMENT0 };
+            glBindFramebuffer(GL_FRAMEBUFFER, g_v27_fbo);
+            invalidate_framebuffer(GL_FRAMEBUFFER, 1, transientAttachments);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(old_read_fbo));
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(old_draw_fbo));
+        }
     }
 
     glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(old_array));
@@ -2183,10 +2236,17 @@ public:
     void preAppSpecialize(zygisk::AppSpecializeArgs* args) override {
         g_env = env_();
         g_target = false;
+        g_target_name = "com.mobile.legends:UnityKillsMe";
         g_app_files_dir = "/data/user/0/com.mobile.legends/files";
         if (!args || !args->nice_name) return;
-        std::string nice = jstring_to_string(args->nice_name);
-        if (nice == "com.mobile.legends:UnityKillsMe") g_target = true;
+
+        const std::string nice = jstring_to_string(args->nice_name);
+        const std::string package_name = base_package_name(nice);
+        if (package_name.empty() || !target_package_enabled(package_name)) return;
+
+        g_target = true;
+        g_target_name = nice;
+        g_app_files_dir = "/data/user/0/" + package_name + "/files";
     }
 
     void postAppSpecialize(const zygisk::AppSpecializeArgs* args) override {
@@ -2202,10 +2262,10 @@ public:
                        "stage=postAppSpecialize\n" +
                        std::string("pid=") + std::to_string((int)getpid()) + "\n" +
                        "uid=" + std::to_string((int)getuid()) + "\n" +
-                       "target=com.mobile.legends:UnityKillsMe\n");
+                       "target=" + g_target_name + "\n");
         }
         if (pthread_create(&g_thread, nullptr, &DanzKuModule::hook_worker, nullptr) != 0) {
-            write_hook_report("thread_fail", "com.mobile.legends:UnityKillsMe", "pthread_create_failed", nullptr, nullptr);
+            write_hook_report("thread_fail", g_target_name, "pthread_create_failed", nullptr, nullptr);
         } else {
             pthread_detach(g_thread);
         }
@@ -2222,7 +2282,7 @@ public:
             void* resolved = handle ? dlsym(handle, "eglSwapBuffers") : nullptr;
             if (handle) dlclose(handle);
             if (!resolved) {
-                write_hook_report("resolve_fail", "com.mobile.legends:UnityKillsMe", "dlsym_failed", resolved, nullptr);
+                write_hook_report("resolve_fail", g_target_name, "dlsym_failed", resolved, nullptr);
                 return nullptr;
             }
 
@@ -2233,7 +2293,7 @@ public:
             bool ok = install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after);
             g_hook_installed = ok && g_orig_eglSwapBuffers != nullptr;
             if (ok) {
-                write_hook_report("install", "com.mobile.legends:UnityKillsMe", detail.c_str(), resolved, got, reinterpret_cast<void*>(g_orig_eglSwapBuffers), got_after);
+                write_hook_report("install", g_target_name, detail.c_str(), resolved, got, reinterpret_cast<void*>(g_orig_eglSwapBuffers), got_after);
                 // Keep the process untouched otherwise; periodically verify that the
                 // GOT slot still points at our replacement and record the callback count.
                 for (int verify = 1; verify <= 6; ++verify) {
@@ -2254,7 +2314,7 @@ public:
                 return nullptr;
             }
             if (attempt == 12) {
-                write_hook_report("install_fail", "com.mobile.legends:UnityKillsMe", detail.c_str(), resolved, got, reinterpret_cast<void*>(g_orig_eglSwapBuffers), got_after);
+                write_hook_report("install_fail", g_target_name, detail.c_str(), resolved, got, reinterpret_cast<void*>(g_orig_eglSwapBuffers), got_after);
             }
         }
         return nullptr;

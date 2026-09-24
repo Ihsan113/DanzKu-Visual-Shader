@@ -3,4 +3,4 @@ name=DanzKu Visual Shader
 version=5.2.26
 versionCode=526
 author=DanzKu
-description=Zygisk libunity GOT eglSwapBuffers adaptive detail, temporal stabilization, motion-aware temporal, material detail, edge-aware, dynamic quality, temporal detail recovery, reconstruction confidence, neural-style and high-end and advanced visual reconstruction plus process-skip diagnostics for Mobile Legends
+description=Zygisk EGL visual reconstruction with APK-managed target package list and multi-game support

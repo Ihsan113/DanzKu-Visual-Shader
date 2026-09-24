@@ -77,3 +77,8 @@ Previous V5.2.20 behavior remains the fallback when the output-stage guard is no
 - Runtime monitor now resolves the active target package dynamically and displays app name/package/PID.
 - Runtime report lookup now follows the selected target package list instead of `com.mobile.legends:UnityKillsMe`.
 - Added launcher package-visibility query for Android 11+.
+## V5.2.26 Target App Manager / Multi-Process Monitor Fix
+- Fixed monitor runtime discovery for apps with multiple processes, especially Mobile Legends.
+- Monitor now enumerates every process matching a target package (including `:process` suffixes) and prefers a runtime report whose `pid=` matches the live process.
+- Prevents false `PID FOUND: YES` + `REPORT FOUND: NO` when the first process returned by `ps` is not the renderer process.
+- Dynamic package labels and target list behavior are preserved.

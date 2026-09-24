@@ -819,9 +819,14 @@ public class MainActivity extends Activity {
         diagPid=false; diagReport=false; diagRead=false; diagPidMatch=false; diagStage=false;
         diagError="";
 
-        // Resolve the currently running process from the APK-managed target list.
-        // A target may use a process suffix (for example :UnityKillsMe), so we
-        // match both the exact package and package-prefixed process names.
+        // Resolve the active target dynamically. A package can have multiple
+        // Android processes (for example com.mobile.legends and
+        // package:process). The old implementation selected
+        // the first PID returned by ps and then checked only that PID's report.
+        // That made MLBB show "PID FOUND" but "REPORT FOUND: NO" when the
+        // renderer lived in a different process. Prefer a runtime report whose
+        // PID matches the actual target process, and fall back to the first
+        // matching process only when no report exists yet.
         String command =
                 "TARGETS=\"" + TARGETS + "\"; " +
                 "FOUND_PID=\"\"; FOUND_PKG=\"\"; FOUND_REPORT=\"\"; " +
@@ -829,12 +834,16 @@ public class MainActivity extends Activity {
                 "while IFS= read -r PKG; do " +
                 "case \"$PKG\" in ''|\\#*) continue;; esac; " +
                 "case \"$PKG\" in *[!A-Za-z0-9_.]*) continue;; esac; " +
-                "PID=$(ps -A -o PID,NAME 2>/dev/null | awk -v p=\"$PKG\" '$2==p || index($2,p\":\")==1 {print $1; exit}'); " +
-                "if [ -n \"$PID\" ]; then " +
-                "R=\"/data/user/0/$PKG/files/danzku_v40_runtime_${PID}.txt\"; " +
-                "if [ -f \"$R\" ]; then FOUND_PID=\"$PID\"; FOUND_PKG=\"$PKG\"; FOUND_REPORT=\"$R\"; break; fi; " +
+                "for PID in $(ps -A -o PID,NAME 2>/dev/null | awk -v p=\"$PKG\" '$2==p || index($2,p\":\")==1 {print $1}'); do " +
                 "if [ -z \"$FOUND_PID\" ]; then FOUND_PID=\"$PID\"; FOUND_PKG=\"$PKG\"; fi; " +
+                "R=\"/data/user/0/$PKG/files/danzku_v40_runtime_${PID}.txt\"; " +
+                "if [ -f \"$R\" ]; then " +
+                "RPID=$(grep '^pid=' \"$R\" 2>/dev/null | head -n 1 | cut -d= -f2-); " +
+                "STAGE=$(grep '^stage=' \"$R\" 2>/dev/null | head -n 1 | cut -d= -f2-); " +
+                "if [ \"$RPID\" = \"$PID\" ] && [ \"$STAGE\" = \"v40_runtime\" ]; then " +
+                "FOUND_PID=\"$PID\"; FOUND_PKG=\"$PKG\"; FOUND_REPORT=\"$R\"; break 2; fi; " +
                 "fi; " +
+                "done; " +
                 "done < \"$TARGETS\"; fi; " +
                 "echo __DANZKU_PID__=$FOUND_PID; " +
                 "echo __DANZKU_PACKAGE__=$FOUND_PKG; " +

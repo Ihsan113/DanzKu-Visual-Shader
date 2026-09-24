@@ -42,3 +42,5 @@ Companion Android monitor/control APK for DanzKu Visual Shader V5.0.
 - Installed launchable apps are discovered dynamically; Android package visibility is declared for launcher activities.
 - The Target Apps dialog also accepts a manual Android package name, so a package can be added even when it is not currently installed.
 - Runtime status no longer assumes `com.mobile.legends` or `UnityKillsMe`; it resolves the active process and exact runtime report from the selected target package list.
+### Multi-process runtime discovery
+The monitor checks all live processes for each selected package, including `package:process` names, and validates the runtime report PID before displaying READY. This avoids selecting a non-renderer process when an app such as Mobile Legends has a dedicated Unity process.

@@ -1,0 +1,18 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.danzku.monitor'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.danzku.monitor'
+        minSdk 29
+        targetSdk 35
+        versionCode 526
+        versionName "5.2.26"
+    }
+}
+
+// This monitor uses only android.app.Activity and platform widgets; no AppCompat/Kotlin dependency is required.

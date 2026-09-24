@@ -113,6 +113,30 @@ if 'V5.2.26' not in workflow_root or 'V5.2.26' not in workflow_monitor:
 if 'DanzKu-Monitor-V5.2.26-debug' not in workflow_root or 'DanzKu-Monitor-V5.2.26-debug' not in workflow_monitor:
     errors.append('workflow artifact name is not V5.2.26')
 
+
+
+# Target package manager / dynamic monitor checks.
+targets_cfg = (root / 'module/config/targets.conf').read_text()
+service_src = (root / 'module/service.sh').read_text()
+if 'module/config/targets.conf' not in workflow:
+    errors.append('build workflow does not package targets.conf')
+if 'TARGETS=' not in service_src or 'com.mobile.legends' not in service_src or 'com.dts.freefiremax' not in service_src:
+    errors.append('service target bootstrap is missing')
+if 'return package_name == "com.mobile.legends"' in src:
+    errors.append('native target filter still has hard-coded Mobile Legends fallback')
+if 'com.mobile.legends:UnityKillsMe' in src:
+    errors.append('native source still has hard-coded UnityKillsMe target')
+if 'TARGETS' not in monitor_java or 'readTargetPackages' not in monitor_java:
+    errors.append('monitor target manager missing')
+if 'package per baris' not in monitor_java:
+    errors.append('monitor manual package input missing')
+if 'com.mobile.legends:UnityKillsMe' in monitor_java:
+    errors.append('monitor still hard-codes UnityKillsMe')
+if 'REPORT_DIR = "/data/user/0/com.mobile.legends/files"' in monitor_java:
+    errors.append('monitor still hard-codes Mobile Legends report directory')
+if '<queries>' not in (root / 'monitor/app/src/main/AndroidManifest.xml').read_text():
+    errors.append('monitor package visibility queries missing')
+
 # Safety-scope implementation checks: reject concrete system-tuning APIs/paths.
 for forbidden in ['sched_setaffinity', 'setpriority(', '/sys/class/devfreq', '/sys/devices/system/cpu', 'cpufreq', 'devfreq', 'system(', 'property_set(']:
     if forbidden.lower() in src.lower():

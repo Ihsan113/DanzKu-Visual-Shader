@@ -43,7 +43,6 @@ public class MainActivity extends Activity {
     final String CONTROL = "/data/local/tmp/danzku_visual_engine";
     final String CONFIG_BRIDGE = "/data/local/tmp/danzku_visual_config";
     final String TARGETS = "/data/adb/modules/danzku_visual_shader/config/targets.conf";
-    final String REPORT_DIR = "/data/user/0/com.mobile.legends/files";
     boolean diagRoot=false, diagPid=false, diagReport=false, diagRead=false, diagPidMatch=false, diagStage=false;
     String diagError="";
     WindowManager wm;
@@ -57,6 +56,7 @@ public class MainActivity extends Activity {
     // Cached native render telemetry. Tap-to-toggle reads only this cache; it never starts root I/O.
     volatile RenderStats lastRenderStats = new RenderStats();
     volatile String lastRuntimeReport = "";
+    volatile String lastRuntimePackage = "";
     SeekBar saturationSeekBar;
     TextView saturationValueLabel;
     SeekBar vibranceSeekBar, anisotropicSeekBar, adaptiveTextureSeekBar, hdrSeekBar;
@@ -99,11 +99,12 @@ public class MainActivity extends Activity {
 
     static class RuntimeState {
         String pid="";
+        String packageName="";
         String report="";
         boolean ready=false;
         RuntimeState() {}
 
-        RuntimeState(String p,String r,boolean ok){pid=p;report=r;ready=ok;}
+        RuntimeState(String p,String pkg,String r,boolean ok){pid=p;packageName=pkg;report=r;ready=ok;}
     }
 
     @Override public void onCreate(Bundle b) {
@@ -274,6 +275,17 @@ public class MainActivity extends Activity {
         return apps;
     }
 
+    String appLabel(String packageName) {
+        if (packageName == null || packageName.length() == 0) return "Tidak diketahui";
+        try {
+            android.content.pm.ApplicationInfo info = getPackageManager().getApplicationInfo(packageName, 0);
+            CharSequence cs = getPackageManager().getApplicationLabel(info);
+            return cs == null ? packageName : cs.toString();
+        } catch (Exception ignored) {
+            return packageName;
+        }
+    }
+
     HashSet<String> readTargetPackages() {
         HashSet<String> out = new HashSet<>();
         String text = su("cat \"" + TARGETS + "\" 2>/dev/null");
@@ -285,8 +297,11 @@ public class MainActivity extends Activity {
             if (hash >= 0) line = line.substring(0, hash).trim();
             if (line.matches("[A-Za-z0-9_\\.]+")) out.add(line);
         }
-        if (out.isEmpty()) out.add("com.mobile.legends");
         return out;
+    }
+
+    boolean validPackageName(String pkg) {
+        return pkg != null && pkg.matches("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+");
     }
 
     void writeTargetPackages(Set<String> packages) {
@@ -296,7 +311,7 @@ public class MainActivity extends Activity {
         text.append("# DanzKu target packages. One Android package per line.\n");
         text.append("# Managed by DanzKu Monitor APK.\n");
         for (String pkg : sorted) {
-            if (pkg != null && pkg.matches("[A-Za-z0-9_\\.]+")) text.append(pkg).append('\n');
+            if (validPackageName(pkg)) text.append(pkg).append('\n');
         }
         String encoded = Base64.encodeToString(
                 text.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8),
@@ -304,7 +319,11 @@ public class MainActivity extends Activity {
         String cmd = "mkdir -p \"$(dirname \"" + TARGETS + "\")\" && " +
                 "printf '%s' '" + encoded + "' | toybox base64 -d > \"" + TARGETS + ".tmp\" && " +
                 "chmod 0644 \"" + TARGETS + ".tmp\" && mv \"" + TARGETS + ".tmp\" \"" + TARGETS + "\"";
-        su(cmd);
+        String result = su(cmd);
+        if (result.startsWith("ERROR:")) {
+            runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                    "Gagal menyimpan target: " + result, Toast.LENGTH_LONG).show());
+        }
     }
 
     void showTargetAppsDialog() {
@@ -312,50 +331,100 @@ public class MainActivity extends Activity {
             HashSet<String> selected = readTargetPackages();
             ArrayList<TargetApp> apps = installedLaunchableApps();
             runOnUiThread(() -> {
-                if (apps.isEmpty()) {
-                    Toast.makeText(MainActivity.this, "Tidak menemukan aplikasi yang bisa diluncurkan.", Toast.LENGTH_LONG).show();
-                    return;
-                }
-                String[] labels = new String[apps.size()];
-                boolean[] checked = new boolean[apps.size()];
-                for (int i = 0; i < apps.size(); ++i) {
-                    TargetApp app = apps.get(i);
-                    labels[i] = app.label + "\n" + app.packageName;
-                    checked[i] = selected.contains(app.packageName);
-                }
+                EditText editor = new EditText(MainActivity.this);
+                editor.setHint("Satu package per baris\ncontoh: com.dts.freefiremax");
+                editor.setGravity(Gravity.TOP | Gravity.START);
+                editor.setTextSize(14);
+                editor.setSingleLine(false);
+                editor.setMinLines(10);
+                editor.setHorizontallyScrolling(false);
+                editor.setTypeface(Typeface.MONOSPACE);
+                editor.setText(joinPackages(selected));
+                editor.setPadding(18, 12, 18, 12);
+
+                LinearLayout custom = new LinearLayout(MainActivity.this);
+                custom.setOrientation(LinearLayout.VERTICAL);
+                TextView hint = tv("Edit langsung daftar package. Satu package per baris. Kamu juga bisa memasukkan package yang belum terpasang.");
+                hint.setTextSize(12);
+                custom.addView(hint);
+
+                Button installed = new Button(MainActivity.this);
+                installed.setText("PILIH DARI APP TERPASANG");
+                installed.setMinHeight(dp(50));
+                installed.setOnClickListener(v -> {
+                    String[] labels = new String[apps.size()];
+                    boolean[] checked = new boolean[apps.size()];
+                    HashSet<String> current = parsePackageEditor(editor.getText().toString());
+                    for (int i = 0; i < apps.size(); ++i) {
+                        TargetApp app = apps.get(i);
+                        labels[i] = app.label + "\n" + app.packageName;
+                        checked[i] = current.contains(app.packageName);
+                    }
+                    new AlertDialog.Builder(MainActivity.this)
+                            .setTitle("APP TERPASANG")
+                            .setMultiChoiceItems(labels, checked, (d, which, isChecked) -> {
+                                HashSet<String> now = parsePackageEditor(editor.getText().toString());
+                                String pkg = apps.get(which).packageName;
+                                if (isChecked) now.add(pkg); else now.remove(pkg);
+                                editor.setText(joinPackages(now));
+                                editor.setSelection(editor.length());
+                            })
+                            .setPositiveButton("SELESAI", null)
+                            .show();
+                });
+                custom.addView(installed);
+                custom.addView(editor);
 
                 AlertDialog dialog = new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("DANZKU TARGET APPS")
-                        .setMultiChoiceItems(labels, checked, (d, which, isChecked) -> {
-                            if (isChecked) selected.add(apps.get(which).packageName);
-                            else selected.remove(apps.get(which).packageName);
-                        })
+                        .setTitle("DANZKU TARGET PACKAGE LIST")
+                        .setView(custom)
                         .setNegativeButton("BATAL", null)
                         .setPositiveButton("SIMPAN", null)
                         .create();
 
                 dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-                    if (selected.isEmpty()) {
-                        new AlertDialog.Builder(MainActivity.this)
-                                .setTitle("Target kosong")
-                                .setMessage("Pilih minimal satu aplikasi agar DanzKu tetap punya target.")
-                                .setPositiveButton("OK", null)
-                                .show();
+                    HashSet<String> packages = parsePackageEditor(editor.getText().toString());
+                    if (packages.isEmpty()) {
+                        editor.setError("Masukkan minimal satu package target");
                         return;
                     }
                     ioExecutor.execute(() -> {
-                        writeTargetPackages(selected);
+                        writeTargetPackages(packages);
                         runOnUiThread(() -> {
                             dialog.dismiss();
                             Toast.makeText(MainActivity.this,
-                                    "Target tersimpan. Tutup & buka ulang game agar target baru aktif.",
+                                    "Target package tersimpan. Restart aplikasi target agar hook baru aktif.",
                                     Toast.LENGTH_LONG).show();
+                            refresh();
                         });
                     });
                 }));
                 dialog.show();
             });
         });
+    }
+
+    String joinPackages(Set<String> packages) {
+        ArrayList<String> sorted = new ArrayList<>(packages);
+        Collections.sort(sorted, String.CASE_INSENSITIVE_ORDER);
+        StringBuilder out = new StringBuilder();
+        for (String pkg : sorted) {
+            if (validPackageName(pkg)) out.append(pkg).append('\n');
+        }
+        return out.toString().trim();
+    }
+
+    HashSet<String> parsePackageEditor(String text) {
+        HashSet<String> out = new HashSet<>();
+        if (text == null) return out;
+        for (String raw : text.split("\n")) {
+            String pkg = raw.trim();
+            if (pkg.length() == 0 || pkg.startsWith("#")) continue;
+            int hash = pkg.indexOf('#');
+            if (hash >= 0) pkg = pkg.substring(0, hash).trim();
+            if (validPackageName(pkg)) out.add(pkg);
+        }
+        return out;
     }
 
     void addSaturationControl() {
@@ -733,7 +802,7 @@ public class MainActivity extends Activity {
         String encoded = Base64.encodeToString(config.getBytes(java.nio.charset.StandardCharsets.UTF_8), Base64.NO_WRAP);
         String cmd = "printf '%s' '" + encoded + "' | toybox base64 -d > \"" + CONFIG_BRIDGE + ".tmp\" && " +
                      "chmod 0644 \"" + CONFIG_BRIDGE + ".tmp\" && mv \"" + CONFIG_BRIDGE + ".tmp\" \"" + CONFIG_BRIDGE + "\" && " +
-                     "printf '%s\\n' '" + safe + "' > \"" + CONTROL + ".tmp\" && chmod 0644 \"" + CONTROL + ".tmp\" && mv \"" + CONTROL + ".tmp\" \"" + CONTROL + "\"";
+                     "printf '%s\n' '" + safe + "' > \"" + CONTROL + ".tmp\" && chmod 0644 \"" + CONTROL + ".tmp\" && mv \"" + CONTROL + ".tmp\" \"" + CONTROL + "\"";
         su(cmd);
     }
 
@@ -750,28 +819,39 @@ public class MainActivity extends Activity {
         diagPid=false; diagReport=false; diagRead=false; diagPidMatch=false; diagStage=false;
         diagError="";
 
-        // One root invocation per runtime sample. Keeping PID lookup and report
-        // read in the same shell avoids a race where the Unity process restarts
-        // between separate su calls. The exact current-PID report is authoritative.
+        // Resolve the currently running process from the APK-managed target list.
+        // A target may use a process suffix (for example :UnityKillsMe), so we
+        // match both the exact package and package-prefixed process names.
         String command =
-                "PID=$(pidof com.mobile.legends:UnityKillsMe 2>/dev/null | awk '{print $1}'); " +
-                "echo __DANZKU_PID__=$PID; " +
+                "TARGETS=\"" + TARGETS + "\"; " +
+                "FOUND_PID=\"\"; FOUND_PKG=\"\"; FOUND_REPORT=\"\"; " +
+                "if [ -r \"$TARGETS\" ]; then " +
+                "while IFS= read -r PKG; do " +
+                "case \"$PKG\" in ''|\\#*) continue;; esac; " +
+                "case \"$PKG\" in *[!A-Za-z0-9_.]*) continue;; esac; " +
+                "PID=$(ps -A -o PID,NAME 2>/dev/null | awk -v p=\"$PKG\" '$2==p || index($2,p\":\")==1 {print $1; exit}'); " +
                 "if [ -n \"$PID\" ]; then " +
-                "R=\""+REPORT_DIR+"/danzku_v40_runtime_${PID}.txt\"; " +
-                "echo __DANZKU_REPORT__=$R; " +
-                "if [ -f \"$R\" ]; then cat \"$R\"; fi; " +
-                "fi";
+                "R=\"/data/user/0/$PKG/files/danzku_v40_runtime_${PID}.txt\"; " +
+                "if [ -f \"$R\" ]; then FOUND_PID=\"$PID\"; FOUND_PKG=\"$PKG\"; FOUND_REPORT=\"$R\"; break; fi; " +
+                "if [ -z \"$FOUND_PID\" ]; then FOUND_PID=\"$PID\"; FOUND_PKG=\"$PKG\"; fi; " +
+                "fi; " +
+                "done < \"$TARGETS\"; fi; " +
+                "echo __DANZKU_PID__=$FOUND_PID; " +
+                "echo __DANZKU_PACKAGE__=$FOUND_PKG; " +
+                "if [ -n \"$FOUND_REPORT\" ]; then echo __DANZKU_REPORT__=$FOUND_REPORT; cat \"$FOUND_REPORT\"; fi";
         SuResult result = runSu(command);
         String output = result.output == null ? "" : result.output.trim();
 
         String pid = "";
-        String reportPath = "";
+        String packageName = "";
         String report = "";
-        for (String line : output.split("\\n")) {
+        for (String line : output.split("\n")) {
             if (line.startsWith("__DANZKU_PID__=")) {
                 pid=line.substring("__DANZKU_PID__=".length()).trim();
+            } else if (line.startsWith("__DANZKU_PACKAGE__=")) {
+                packageName=line.substring("__DANZKU_PACKAGE__=".length()).trim();
             } else if (line.startsWith("__DANZKU_REPORT__=")) {
-                reportPath=line.substring("__DANZKU_REPORT__=".length()).trim();
+                // Path is informational; the report body follows.
             } else if (!line.startsWith("ERROR:") && line.length() > 0) {
                 report += line + "\n";
             }
@@ -787,6 +867,7 @@ public class MainActivity extends Activity {
         diagRead = diagReport && result.exitCode == 0;
         if (isValidRuntimeReport(report, pid)) {
             out.pid=pid;
+            out.packageName=packageName;
             out.report=report;
             out.ready=true;
             diagPidMatch=true;
@@ -800,6 +881,7 @@ public class MainActivity extends Activity {
             diagStage=report.contains("stage=v40_runtime");
         }
         out.pid=pid;
+        out.packageName=packageName;
         out.report="";
         out.ready=false;
         return out;
@@ -826,7 +908,7 @@ public class MainActivity extends Activity {
 
     String configValueFromText(String text, String key) {
         if (text == null) return null;
-        for (String line : text.split("\\n")) {
+        for (String line : text.split("\n")) {
             if (line.startsWith(key+"=")) return line.substring(key.length()+1).trim();
         }
         return null;
@@ -839,27 +921,48 @@ public class MainActivity extends Activity {
         if (!rootCheck.startsWith("uid=0")) return "DANZKU MONITOR V5.2.26\nROOT: FAILED\n" + rootCheck;
         RuntimeState st = readRuntime();
         String config = configText();
+        HashSet<String> targets = readTargetPackages();
         if (st.ready) {
             lastRenderStats = parseRenderStats(st.report);
+            lastRuntimeReport = st.report;
         } else {
             lastRenderStats = new RenderStats();
+            lastRuntimeReport = "";
         }
+
+        String targetSummary = targets.isEmpty() ? "Belum ada target" : "Target terdaftar: " + targets.size();
+        String activeSummary;
+        if (st.packageName.length() > 0) {
+            activeSummary = appLabel(st.packageName) + " (" + st.packageName + ")";
+        } else if (!targets.isEmpty()) {
+            activeSummary = "Tidak ada target yang sedang aktif";
+        } else {
+            activeSummary = "Tidak ada target";
+        }
+
         if (!st.ready) {
-            final String text = "DANZKU MONITOR V5.2.26\nROOT: OK\n" +
+            final String text = "DANZKU MONITOR V5.2.26\n" +
+                    "ROOT: OK\n" +
+                    "TARGET: " + targetSummary + "\n" +
+                    "ACTIVE APP: " + activeSummary + "\n" +
                     "PID FOUND: " + (diagPid ? "YES" : "NO") + "\n" +
                     "REPORT FOUND: " + (diagReport ? "YES" : "NO") + "\n" +
                     "READ OK: " + (diagRead ? "YES" : "NO") + "\n" +
                     "PID MATCH: " + (diagPidMatch ? "YES" : "NO") + "\n" +
                     "STAGE OK: " + (diagStage ? "YES" : "NO") + "\n" +
-                    "UnityKillsMe: " + (st.pid.length() > 0 ? "PID " + st.pid : "not detected") +
-                    "\nReport: UNKNOWN\nRuntime report belum lolos validasi." +
+                    "Report: UNKNOWN\nRuntime report belum lolos validasi." +
                     (diagError.length() > 0 ? "\nSU: " + diagError : "");
             runOnUiThread(() -> syncSwitches(null, config));
             return text;
         }
+
         StringBuilder sb = new StringBuilder("DANZKU MONITOR V5.2.26\n");
-        sb.append("ROOT: OK\nUnityKillsMe: PID ").append(st.pid).append("\nReport: READY (PID validated)\n");
-        sb.append("FPS source: eglSwapBuffers\n\n");
+        sb.append("ROOT: OK\n");
+        sb.append("TARGET: ").append(targetSummary).append("\n");
+        sb.append("ACTIVE APP: ").append(activeSummary).append("\n");
+        sb.append("PID: ").append(st.pid).append("\n");
+        sb.append("Report: READY (PID validated)\n");
+        sb.append("FPS source: ").append(orDash(value(st.report, "render_fps_source"))).append("\n\n");
         sb.append("Render FPS: ").append(fmt(lastRenderStats.fps)).append("\n");
         sb.append("Frame Time: ").append(fmt(lastRenderStats.frameTimeMs)).append(" ms\n");
         sb.append("Average FPS: ").append(fmt(lastRenderStats.averageFps)).append("\n");
@@ -1046,6 +1149,9 @@ public class MainActivity extends Activity {
             b.append("FPS ").append(fmt(render.fps));
         } else {
             b.append("DANZKU V5.2.26\n");
+            if (lastRuntimePackage != null && lastRuntimePackage.length() > 0) {
+                b.append("APP ").append(appLabel(lastRuntimePackage)).append(" (").append(lastRuntimePackage).append(")\n");
+            }
             b.append("FPS ").append(fmt(render.fps)).append("\n");
             b.append("Render SRC ").append(render.fps > 0.0 ? "eglSwapBuffers" : "--").append("\n");
             b.append("Frame ").append(fmt(render.frameTimeMs)).append(" ms\n");
@@ -1072,6 +1178,7 @@ public class MainActivity extends Activity {
                 if(!st.ready){
                     lastRenderStats=new RenderStats();
                     lastRuntimeReport="";
+                    lastRuntimePackage="";
                     runOnUiThread(() -> {
                         if(overlayVisible && overlayText != null) {
                             overlayText.setText("DANZKU V5.2.26\nFPS --");
@@ -1084,6 +1191,7 @@ public class MainActivity extends Activity {
                 // The tap handler never starts a root shell; it only renders
                 // cached telemetry. Root I/O happens on the serialized worker.
                 lastRuntimeReport=st.report;
+                lastRuntimePackage=st.packageName;
                 lastRenderStats=parseRenderStats(st.report);
                 runOnUiThread(() -> {
                     if(overlayVisible && overlayText != null) renderOverlayFromCache();

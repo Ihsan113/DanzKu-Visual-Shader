@@ -27,8 +27,8 @@
 static JNIEnv* g_env = nullptr;
 static bool g_target = false;
 static pthread_t g_thread{};
-static std::string g_app_files_dir = "/data/user/0/com.mobile.legends/files";
-static std::string g_target_name = "com.mobile.legends:UnityKillsMe";
+static std::string g_app_files_dir;
+static std::string g_target_name;
 static const char* kTargetConfigPath = "/data/adb/modules/danzku_visual_shader/config/targets.conf";
 
 static std::string trim_copy(const std::string& in) {
@@ -46,12 +46,12 @@ static std::string base_package_name(const std::string& process_name) {
 
 static bool target_package_enabled(const std::string& package_name) {
     int fd = open(kTargetConfigPath, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return package_name == "com.mobile.legends";
+    if (fd < 0) return false;
 
     char buf[8192] = {};
     ssize_t n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
-    if (n <= 0) return package_name == "com.mobile.legends";
+    if (n <= 0) return false;
     buf[n] = '\0';
 
     std::string text(buf, static_cast<size_t>(n));
@@ -2236,8 +2236,8 @@ public:
     void preAppSpecialize(zygisk::AppSpecializeArgs* args) override {
         g_env = env_();
         g_target = false;
-        g_target_name = "com.mobile.legends:UnityKillsMe";
-        g_app_files_dir = "/data/user/0/com.mobile.legends/files";
+        g_target_name.clear();
+        g_app_files_dir.clear();
         if (!args || !args->nice_name) return;
 
         const std::string nice = jstring_to_string(args->nice_name);

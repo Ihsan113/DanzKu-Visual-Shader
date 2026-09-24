@@ -57,3 +57,11 @@ V5.2.26 addresses the verified V5.2.16 skip condition without replacing the prov
 
 ### V5.2.26 output stage
 `reconstruction_output=1` is now parsed natively. When the current target is the default EGL surface and the EGL surface exactly matches the fixed reconstruction target (2408x1080 on the reference device), the module renders the reconstructed texture across the full surface before `eglSwapBuffers`. The path fails closed when those conditions are not satisfied. Runtime telemetry explicitly reports the source viewport, reconstruction dimensions, output target dimensions, output-stage activation/rejection, capture blit success, and final output draw success.
+
+
+## V5.2.26 Target App Manager / Dynamic Monitor
+- The native target filter reads `module/config/targets.conf` and fails closed when it cannot read the file; there is no hard-coded Mobile Legends fallback.
+- The module build workflow explicitly packages `targets.conf`.
+- `service.sh` bootstraps the default target list only when the target file is missing/empty/invalid, then preserves APK-managed changes.
+- The Monitor APK resolves active PID/runtime data from the selected package list and displays the active app dynamically.
+- Target Apps accepts both installed launchable apps and manual package-name input.

@@ -66,3 +66,14 @@ Previous V5.2.20 behavior remains the fallback when the output-stage guard is no
 - Monitor APK now lists launchable installed apps and lets the user enable or disable DanzKu per package.
 - Existing Mobile Legends targeting remains the fallback/default for backward compatibility.
 - Target changes take effect when the target app is restarted.
+
+
+## V5.2.26 Target App Manager / Dynamic UI Fix
+- Removed hard-coded Mobile Legends fallback from native target selection.
+- Added build-time packaging of `module/config/targets.conf`.
+- Added first-install/update bootstrap for a missing or empty target list.
+- Reworked Target Package List UI into a direct multiline package editor.
+- Added installed-app picker as a convenience; manual package input remains available.
+- Runtime monitor now resolves the active target package dynamically and displays app name/package/PID.
+- Runtime report lookup now follows the selected target package list instead of `com.mobile.legends:UnityKillsMe`.
+- Added launcher package-visibility query for Android 11+.

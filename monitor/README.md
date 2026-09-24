@@ -35,3 +35,10 @@ Companion Android monitor/control APK for DanzKu Visual Shader V5.0.
 ## V5.2.26 Saturation Pop UI
 - Added an in-app Saturation Pop slider from 1.00× (native) to 1.50× (strong pop).
 - Changes are written to `saturation=` and synchronized to the native config bridge when released.
+
+
+## V5.2.26 Target App Manager fix
+- Target selection is APK-managed through `config/targets.conf`.
+- Installed launchable apps are discovered dynamically; Android package visibility is declared for launcher activities.
+- The Target Apps dialog also accepts a manual Android package name, so a package can be added even when it is not currently installed.
+- Runtime status no longer assumes `com.mobile.legends` or `UnityKillsMe`; it resolves the active process and exact runtime report from the selected target package list.

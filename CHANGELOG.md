@@ -42,3 +42,5 @@ Previous V5.2.20 behavior remains the fallback when the output-stage guard is no
 - Native V5.2.26 FIXED2 rendering implementation is unchanged.
 - Static source validation: PASS.
 - Android/GitHub Actions APK build: not executed locally in this environment; use the included workflow for authoritative compilation.
+
+- Added APK controls for RAM Optimization and FPS Boost. RAM optimization releases inactive temporal history resources; FPS boost reduces runtime polling/report overhead without changing visual shader parameters.

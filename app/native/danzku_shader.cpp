@@ -421,6 +421,8 @@ static float g_v5_reflection_value = 0.08f;
 static float g_v5_lighting_value = 0.08f;
 static float g_v5_effect_value = 0.10f;
 static float g_v5_saturation_value = 1.25f;
+static bool g_ram_optimization_value = true;
+static bool g_fps_boost_value = true;
 static volatile unsigned long long g_v27_process_calls = 0;
 static volatile unsigned long long g_v27_process_success = 0;
 static volatile unsigned long long g_v27_process_skip = 0;
@@ -575,6 +577,8 @@ static void parse_v27_config() {
             else if (key == "lighting_enhancement") g_v5_lighting_value = strtof(val.c_str(), nullptr);
             else if (key == "effect_enhancement") g_v5_effect_value = strtof(val.c_str(), nullptr);
             else if (key == "saturation") g_v5_saturation_value = strtof(val.c_str(), nullptr);
+            else if (key == "ram_optimization") g_ram_optimization_value = (atoi(val.c_str()) != 0);
+            else if (key == "fps_boost") g_fps_boost_value = (atoi(val.c_str()) != 0);
             if (key == "enabled" || key == "logging" || key == "sharpen" || key == "clarity" ||
                 key == "temporal" || key == "temporal_strength" || key == "motion_aware" ||
                 key == "motion_threshold" || key == "motion_softness" || key == "material_detail" ||
@@ -589,7 +593,8 @@ static void parse_v27_config() {
                 key == "advanced_aa" || key == "aa_strength" || key == "shadow_enhancement" ||
                 key == "shadow_stability" || key == "contact_shadow" || key == "ao_enhancement" ||
                 key == "specular_enhancement" || key == "reflection_approximation" ||
-                key == "lighting_enhancement" || key == "effect_enhancement" || key == "saturation") {
+                key == "lighting_enhancement" || key == "effect_enhancement" || key == "saturation" ||
+                key == "ram_optimization" || key == "fps_boost") {
                 g_v27_config_parse_success = 1;
             }
         }
@@ -705,7 +710,7 @@ static void v27_write_runtime_report();
 static bool reload_v27_config_if_changed(bool force = false) {
     const uint64_t now = monotonic_ns();
     if (!force && g_v27_config_check_ns != 0 &&
-        now - g_v27_config_check_ns < 250000000ULL) return false;
+        now - g_v27_config_check_ns < (g_fps_boost_value ? 500000000ULL : 250000000ULL)) return false;
     g_v27_config_check_ns = now;
     const std::string path = config_file_path();
     if (path.empty()) return false;
@@ -1238,6 +1243,8 @@ static void v27_write_runtime_report() {
     out += "lighting_enhancement=" + std::to_string(g_v5_lighting_value) + "\n";
     out += "effect_enhancement=" + std::to_string(g_v5_effect_value) + "\n";
     out += "saturation=" + std::to_string(g_v5_saturation_value) + "\n";
+    out += "ram_optimization=" + std::to_string(g_ram_optimization_value ? 1 : 0) + "\n";
+    out += "fps_boost=" + std::to_string(g_fps_boost_value ? 1 : 0) + "\n";
     out += "history_valid=" + std::to_string(g_v28_history_valid ? 1 : 0) + "\n";
     pthread_mutex_lock(&g_fps_mutex);
     char fps_buf[64] = {};
@@ -1340,11 +1347,48 @@ static void v27_write_runtime_report() {
 static inline void v27_maybe_write_runtime_report() {
     // Snapshot after the outcome counter is updated, so skip_* fields describe
     // the same process_calls value visible in the report.
-    if (g_v27_process_calls == 1 || (g_v27_process_calls % 30) == 0) {
+    if (g_v27_process_calls == 1 || (g_v27_process_calls % (g_fps_boost_value ? 60 : 30)) == 0) {
         v27_write_runtime_report();
     }
 }
 
+
+static void v27_ram_optimize_history() {
+    // The temporal history is the only persistent full-frame auxiliary buffer.
+    // Release it only when temporal is disabled, so active temporal visuals are
+    // never degraded. It will be recreated lazily when temporal is enabled again.
+    if (!g_ram_optimization_value || g_v28_temporal_value) return;
+    if (g_v28_history_fbo) { glDeleteFramebuffers(1, &g_v28_history_fbo); g_v28_history_fbo = 0; }
+    if (g_v28_history_texture) { glDeleteTextures(1, &g_v28_history_texture); g_v28_history_texture = 0; }
+    g_v28_history_valid = false;
+}
+
+static bool v27_ensure_history() {
+    if (!g_v28_temporal_value) return false;
+    if (g_v28_history_texture && g_v28_history_fbo) return true;
+    if (g_v27_width <= 0 || g_v27_height <= 0) return false;
+    glGenTextures(1, &g_v28_history_texture);
+    glBindTexture(GL_TEXTURE_2D, g_v28_history_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_v27_width, g_v27_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glGenFramebuffers(1, &g_v28_history_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_v28_history_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_v28_history_texture, 0);
+    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        if (g_v28_history_fbo) glDeleteFramebuffers(1, &g_v28_history_fbo);
+        if (g_v28_history_texture) glDeleteTextures(1, &g_v28_history_texture);
+        g_v28_history_fbo = 0;
+        g_v28_history_texture = 0;
+        return false;
+    }
+    g_v28_history_valid = false;
+    return true;
+}
 
 static void v27_release_resources() {
     if (g_v27_program) { glDeleteProgram(g_v27_program); g_v27_program = 0; }
@@ -1566,6 +1610,8 @@ static bool v27_process_frame(EGLSurface surface) {
         // texture using its own texel size and the final draw covers the real surface.
         glViewport(0, 0, surface_width, surface_height);
     }
+    v27_ram_optimize_history();
+    v27_ensure_history();
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, g_v27_texture);
     glActiveTexture(GL_TEXTURE1);

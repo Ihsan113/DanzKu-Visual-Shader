@@ -151,6 +151,8 @@ public class MainActivity extends Activity {
         defaultStrengths.put("advanced_aa", "1");
         defaultStrengths.put("enabled", "1");
         defaultStrengths.put("logging", "1");
+        defaultStrengths.put("ram_optimization", "1");
+        defaultStrengths.put("fps_boost", "1");
     }
 
     int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
@@ -171,6 +173,8 @@ public class MainActivity extends Activity {
         root.addView(status);
 
         addMasterSwitch();
+        addToggle("RAM Optimization", "ram_optimization");
+        addToggle("FPS Boost", "fps_boost");
         addToggle("Advanced AA", "advanced_aa");
         addToggle("Shadow Enhancement", "shadow_enhancement");
         addToggle("Contact Shadow", "contact_shadow");

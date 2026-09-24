@@ -56,6 +56,8 @@ public class MainActivity extends Activity {
     volatile String lastRuntimeReport = "";
     SeekBar saturationSeekBar;
     TextView saturationValueLabel;
+    SeekBar vibranceSeekBar, anisotropicSeekBar, adaptiveTextureSeekBar, hdrSeekBar;
+    TextView vibranceValueLabel, anisotropicValueLabel, adaptiveTextureValueLabel, hdrValueLabel;
 
 
     RenderStats parseRenderStats(String report) {
@@ -146,6 +148,11 @@ public class MainActivity extends Activity {
         defaultStrengths.put("lighting_enhancement", "0.08");
         defaultStrengths.put("effect_enhancement", "0.10");
         defaultStrengths.put("saturation", "1.25");
+        defaultStrengths.put("vibrance", "0.20");
+        defaultStrengths.put("anisotropic_enhancement", "0.00");
+        defaultStrengths.put("frame_buffer_optimization", "1");
+        defaultStrengths.put("adaptive_texture_enhancement", "0.15");
+        defaultStrengths.put("hdr_enhancement", "0.10");
         defaultStrengths.put("visual_proof", "1");
         defaultStrengths.put("visual_proof_bypass", "1");
         defaultStrengths.put("advanced_aa", "1");
@@ -175,6 +182,7 @@ public class MainActivity extends Activity {
         addMasterSwitch();
         addToggle("RAM Optimization", "ram_optimization");
         addToggle("FPS Boost", "fps_boost");
+        addToggle("Frame Buffer Optimization", "frame_buffer_optimization");
         addToggle("Advanced AA", "advanced_aa");
         addToggle("Shadow Enhancement", "shadow_enhancement");
         addToggle("Contact Shadow", "contact_shadow");
@@ -184,6 +192,10 @@ public class MainActivity extends Activity {
         addToggle("Lighting Enhancement", "lighting_enhancement");
         addToggle("Effect Enhancement", "effect_enhancement");
         addSaturationControl();
+        addFloatControl("Vibrance", "vibrance", 0.0f, 1.0f, 0.20f, "vibranceSeekBar", "vibranceValueLabel", "0.00");
+        addFloatControl("Anisotropic Visual Enhancement", "anisotropic_enhancement", 0.0f, 16.0f, 0.0f, "anisotropicSeekBar", "anisotropicValueLabel", "0.0");
+        addFloatControl("Adaptive Texture Enhancement", "adaptive_texture_enhancement", 0.0f, 0.50f, 0.15f, "adaptiveTextureSeekBar", "adaptiveTextureValueLabel", "0.00");
+        addFloatControl("HDR Enhancement", "hdr_enhancement", 0.0f, 1.0f, 0.10f, "hdrSeekBar", "hdrValueLabel", "0.00");
         addToggle("Visual Proof", "visual_proof");
         addToggle("Visual Proof Bypass", "visual_proof_bypass");
         addToggle("DanzKu File Log", "logging");
@@ -269,6 +281,78 @@ public class MainActivity extends Activity {
         box.addView(hint);
 
         root.addView(box);
+    }
+
+    void addFloatControl(String title, String key, float min, float max, float def, String barField, String labelField, String format) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(20, 12, 20, 12);
+        TextView titleView = tv(title);
+        titleView.setTextSize(16);
+        titleView.setTypeface(null, Typeface.BOLD);
+        box.addView(titleView);
+        TextView valueLabel = tv(String.format(Locale.US, format, def));
+        valueLabel.setTextSize(14);
+        box.addView(valueLabel);
+        SeekBar bar = new SeekBar(this);
+        int maxProgress = 100;
+        bar.setMax(maxProgress);
+        bar.setProgress(Math.round((def - min) / (max - min) * maxProgress));
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                float v = min + (progress / (float)maxProgress) * (max - min);
+                valueLabel.setText(String.format(Locale.US, format, v));
+            }
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                if (!seekBar.isEnabled()) return;
+                final float v = min + (seekBar.getProgress() / (float)maxProgress) * (max - min);
+                ioExecutor.execute(() -> {
+                    writeConfigValue(key, String.format(Locale.US, format, v));
+                    syncNativeControlFromConfigNow();
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                            title + " " + String.format(Locale.US, format, v) + " diterapkan",
+                            Toast.LENGTH_SHORT).show());
+                });
+            }
+        });
+        box.addView(bar);
+        TextView hint = tv("0 = OFF/native • dapat diubah live dari APK");
+        hint.setTextSize(12);
+        box.addView(hint);
+        root.addView(box);
+        if ("vibranceSeekBar".equals(barField)) { vibranceSeekBar=bar; vibranceValueLabel=valueLabel; }
+        else if ("anisotropicSeekBar".equals(barField)) { anisotropicSeekBar=bar; anisotropicValueLabel=valueLabel; }
+        else if ("adaptiveTextureSeekBar".equals(barField)) { adaptiveTextureSeekBar=bar; adaptiveTextureValueLabel=valueLabel; }
+        else if ("hdrSeekBar".equals(barField)) { hdrSeekBar=bar; hdrValueLabel=valueLabel; }
+    }
+
+    void syncFloatControl(String config, String key, SeekBar bar, TextView label, float min, float max, float def, String format) {
+        if (bar == null) return;
+        String raw = configValueFromText(config, key);
+        float value = def;
+        try { if (raw != null) value = Float.parseFloat(raw.trim()); } catch (Exception ignored) {}
+        value = Math.max(min, Math.min(max, value));
+        final int progress = Math.round((value-min)/(max-min)*100.0f);
+        bar.setOnSeekBarChangeListener(null);
+        bar.setProgress(progress);
+        label.setText(String.format(Locale.US, format, value));
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar seekBar, int p, boolean fromUser) {
+                float v=min+(p/100.0f)*(max-min);
+                label.setText(String.format(Locale.US, format, v));
+            }
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                if (!seekBar.isEnabled()) return;
+                final float v=min+(seekBar.getProgress()/100.0f)*(max-min);
+                ioExecutor.execute(() -> { writeConfigValue(key, String.format(Locale.US, format, v)); syncNativeControlFromConfigNow(); });
+            }
+        });
+        String enabled = configValueFromText(config, "enabled");
+        boolean on = isFeatureOn(enabled == null ? "1" : enabled);
+        bar.setEnabled(on);
+        bar.setAlpha(on ? 1f : 0.45f);
     }
 
     void updateSaturationLabel(float value) {
@@ -740,6 +824,10 @@ public class MainActivity extends Activity {
             }
         }
         syncSaturationControl(config);
+        syncFloatControl(config, "vibrance", vibranceSeekBar, vibranceValueLabel, 0.0f, 1.0f, 0.20f, "%.2f");
+        syncFloatControl(config, "anisotropic_enhancement", anisotropicSeekBar, anisotropicValueLabel, 0.0f, 16.0f, 0.0f, "%.1f");
+        syncFloatControl(config, "adaptive_texture_enhancement", adaptiveTextureSeekBar, adaptiveTextureValueLabel, 0.0f, 0.50f, 0.15f, "%.2f");
+        syncFloatControl(config, "hdr_enhancement", hdrSeekBar, hdrValueLabel, 0.0f, 1.0f, 0.10f, "%.2f");
     }
 
     void updateOverlayPermissionUi() {

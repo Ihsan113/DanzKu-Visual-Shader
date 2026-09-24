@@ -308,6 +308,8 @@ static GLuint g_v27_fbo = 0;
 static GLuint g_v28_history_texture = 0;
 static GLuint g_v28_history_fbo = 0;
 static bool g_v28_history_valid = false;
+static int g_v28_history_width = 0;
+static int g_v28_history_height = 0;
 static GLint g_v27_pos = -1;
 static GLint g_v27_uv = -1;
 static GLint g_v27_tex = -1;
@@ -356,6 +358,10 @@ static GLint g_v5_reflection = -1;
 static GLint g_v5_lighting = -1;
 static GLint g_v5_effect = -1;
 static GLint g_v5_saturation = -1;
+static GLint g_v6_vibrance = -1;
+static GLint g_v6_anisotropic = -1;
+static GLint g_v6_adaptive_texture = -1;
+static GLint g_v6_hdr = -1;
 static int g_v27_width = 0;
 static int g_v27_height = 0;
 static volatile EGLint g_v27_last_surface_width = 0;
@@ -421,6 +427,11 @@ static float g_v5_reflection_value = 0.08f;
 static float g_v5_lighting_value = 0.08f;
 static float g_v5_effect_value = 0.10f;
 static float g_v5_saturation_value = 1.25f;
+static float g_v6_vibrance_value = 0.20f;
+static float g_v6_anisotropic_value = 0.0f;
+static bool g_v6_frame_buffer_optimization_value = true;
+static float g_v6_adaptive_texture_value = 0.0f;
+static float g_v6_hdr_value = 0.0f;
 static bool g_ram_optimization_value = true;
 static bool g_fps_boost_value = true;
 static volatile unsigned long long g_v27_process_calls = 0;
@@ -577,6 +588,11 @@ static void parse_v27_config() {
             else if (key == "lighting_enhancement") g_v5_lighting_value = strtof(val.c_str(), nullptr);
             else if (key == "effect_enhancement") g_v5_effect_value = strtof(val.c_str(), nullptr);
             else if (key == "saturation") g_v5_saturation_value = strtof(val.c_str(), nullptr);
+            else if (key == "vibrance") g_v6_vibrance_value = strtof(val.c_str(), nullptr);
+            else if (key == "anisotropic_enhancement") g_v6_anisotropic_value = strtof(val.c_str(), nullptr);
+            else if (key == "frame_buffer_optimization") g_v6_frame_buffer_optimization_value = (atoi(val.c_str()) != 0);
+            else if (key == "adaptive_texture_enhancement") g_v6_adaptive_texture_value = strtof(val.c_str(), nullptr);
+            else if (key == "hdr_enhancement") g_v6_hdr_value = strtof(val.c_str(), nullptr);
             else if (key == "ram_optimization") g_ram_optimization_value = (atoi(val.c_str()) != 0);
             else if (key == "fps_boost") g_fps_boost_value = (atoi(val.c_str()) != 0);
             if (key == "enabled" || key == "logging" || key == "sharpen" || key == "clarity" ||
@@ -594,6 +610,8 @@ static void parse_v27_config() {
                 key == "shadow_stability" || key == "contact_shadow" || key == "ao_enhancement" ||
                 key == "specular_enhancement" || key == "reflection_approximation" ||
                 key == "lighting_enhancement" || key == "effect_enhancement" || key == "saturation" ||
+                key == "vibrance" || key == "anisotropic_enhancement" || key == "frame_buffer_optimization" ||
+                key == "adaptive_texture_enhancement" || key == "hdr_enhancement" ||
                 key == "ram_optimization" || key == "fps_boost") {
                 g_v27_config_parse_success = 1;
             }
@@ -667,6 +685,14 @@ static void parse_v27_config() {
     if (g_v5_effect_value > 0.50f) g_v5_effect_value = 0.50f;
     if (g_v5_saturation_value < 0.0f) g_v5_saturation_value = 0.0f;
     if (g_v5_saturation_value > 1.50f) g_v5_saturation_value = 1.50f;
+    if (g_v6_vibrance_value < 0.0f) g_v6_vibrance_value = 0.0f;
+    if (g_v6_vibrance_value > 1.0f) g_v6_vibrance_value = 1.0f;
+    if (g_v6_anisotropic_value < 0.0f) g_v6_anisotropic_value = 0.0f;
+    if (g_v6_anisotropic_value > 16.0f) g_v6_anisotropic_value = 16.0f;
+    if (g_v6_adaptive_texture_value < 0.0f) g_v6_adaptive_texture_value = 0.0f;
+    if (g_v6_adaptive_texture_value > 0.50f) g_v6_adaptive_texture_value = 0.50f;
+    if (g_v6_hdr_value < 0.0f) g_v6_hdr_value = 0.0f;
+    if (g_v6_hdr_value > 1.0f) g_v6_hdr_value = 1.0f;
 }
 
 
@@ -842,6 +868,10 @@ static bool v27_init(int width, int height) {
         "uniform float uLightingEnhancement;"
         "uniform float uEffectEnhancement;"
         "uniform float uSaturation;"
+        "uniform float uVibrance;"
+        "uniform float uAnisotropic;"
+        "uniform float uAdaptiveTexture;"
+        "uniform float uHDR;"
         "varying vec2 vUV;"
         "void main(){"
         " vec4 sampleC=texture2D(uTex,vUV);"
@@ -897,6 +927,9 @@ static bool v27_init(int width, int height) {
         " vec3 wideDiagB=texture2D(uTex,vUV+vec2(-2.0*uTexel.x,-2.0*uTexel.y)).rgb;"
         " vec3 wideAvg=(wideDiagA+wideDiagB)*0.5;"
         " vec3 wideDetail=c-wideAvg;"
+        " float textureComplexity=smoothstep(0.006,0.10,0.60*contrast+0.40*edgeRaw);"
+        " vec3 adaptiveTextureColor=c+wideDetail*(uAdaptiveTexture*textureComplexity);"
+        " adaptiveTextureColor=clamp(adaptiveTextureColor,vec3(0.0),vec3(1.0));"
         " vec3 multiScaleDetail=mix(detail,wideDetail,clamp(uStructureStrength,0.0,1.0));"
         " float neuralGate=smoothstep(uConfidenceThreshold,uConfidenceThreshold+uConfidenceSoftness,reconstructionConfidence);"
         " vec3 neuralEnhanced=enhanced+multiScaleDetail*(uNeuralStrength*uNeuralStyle)*edgeMask*qualityScale*neuralGate*clamp(uReconstruction,0.0,1.0);"
@@ -932,8 +965,30 @@ static bool v27_init(int width, int height) {
         " vec3 temporalColor=mix(v5Color,recoveredHistory,temporalWeight);"
         " float finalLum=dot(temporalColor,vec3(0.2126,0.7152,0.0722));"
         " vec3 saturationColor=finalLum+(temporalColor-vec3(finalLum))*uSaturation;"
-        " saturationColor=clamp(saturationColor,vec3(0.0),vec3(1.0));"
-        " gl_FragColor=vec4(mix(c,saturationColor,uEnabled),sampleC.a);"
+        " float vmax=max(max(temporalColor.r,temporalColor.g),temporalColor.b);"
+        " float vmin=min(min(temporalColor.r,temporalColor.g),temporalColor.b);"
+        " float chroma=max(vmax-vmin,0.0);"
+        " float vibranceWeight=(1.0-smoothstep(0.02,0.85,chroma))*uVibrance;"
+        " vec3 vibranceColor=finalLum+(saturationColor-vec3(finalLum))*(1.0+vibranceWeight);"
+        " float anisoLevel=clamp(uAnisotropic/16.0,0.0,1.0);"
+        " vec2 anisoStep=vec2(uTexel.x,uTexel.y)*mix(1.0,3.0,anisoLevel);"
+        " vec3 a1=texture2D(uTex,vUV+vec2(anisoStep.x,0.0)).rgb;"
+        " vec3 a2=texture2D(uTex,vUV-vec2(anisoStep.x,0.0)).rgb;"
+        " vec3 a3=texture2D(uTex,vUV+vec2(0.0,anisoStep.y)).rgb;"
+        " vec3 a4=texture2D(uTex,vUV-vec2(0.0,anisoStep.y)).rgb;"
+        " vec3 anisoAvg=(a1+a2+a3+a4)*0.25;"
+        " float anisoDetail=dot(abs(c-anisoAvg),vec3(0.3333));"
+        " vec3 anisoColor=vibranceColor+(c-anisoAvg)*(0.35*anisoLevel*smoothstep(0.004,0.10,anisoDetail));"
+        " vec3 textureColor=mix(anisoColor,adaptiveTextureColor,clamp(uAdaptiveTexture,0.0,0.50)*0.35);"
+        " float lum=dot(textureColor,vec3(0.2126,0.7152,0.0722));"
+        " float shadowMaskHdr=1.0-smoothstep(0.06,0.42,lum);"
+        " float highlightMaskHdr=smoothstep(0.58,0.94,lum);"
+        " float hdrShadowLift=shadowMaskHdr*uHDR*0.08;"
+        " float hdrHighlightCompress=highlightMaskHdr*uHDR*0.10;"
+        " vec3 hdrColor=textureColor+textureColor*hdrShadowLift;"
+        " hdrColor=hdrColor/(1.0+hdrHighlightCompress*max(lum,0.001));"
+        " hdrColor=clamp(hdrColor,vec3(0.0),vec3(1.0));"
+        " gl_FragColor=vec4(mix(c,hdrColor,uEnabled),sampleC.a);"
         "}";
 
     GLuint v = v27_compile_shader(GL_VERTEX_SHADER, vs);
@@ -1005,6 +1060,10 @@ static bool v27_init(int width, int height) {
     g_v5_lighting = glGetUniformLocation(g_v27_program, "uLightingEnhancement");
     g_v5_effect = glGetUniformLocation(g_v27_program, "uEffectEnhancement");
     g_v5_saturation = glGetUniformLocation(g_v27_program, "uSaturation");
+    g_v6_vibrance = glGetUniformLocation(g_v27_program, "uVibrance");
+    g_v6_anisotropic = glGetUniformLocation(g_v27_program, "uAnisotropic");
+    g_v6_adaptive_texture = glGetUniformLocation(g_v27_program, "uAdaptiveTexture");
+    g_v6_hdr = glGetUniformLocation(g_v27_program, "uHDR");
 
     glGenTextures(1, &g_v27_texture);
     glBindTexture(GL_TEXTURE_2D, g_v27_texture);
@@ -1027,31 +1086,12 @@ static bool v27_init(int width, int height) {
         return false;
     }
 
-    // V2.8 temporal history: a second GPU-local texture/FBO stores the previous
-    // completed output frame. It is initialized from the first captured frame so
-    // the temporal pass never samples undefined history.
-    glGenTextures(1, &g_v28_history_texture);
-    glBindTexture(GL_TEXTURE_2D, g_v28_history_texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-
-    glGenFramebuffers(1, &g_v28_history_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, g_v28_history_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_v28_history_texture, 0);
-    GLenum history_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    if (history_status != GL_FRAMEBUFFER_COMPLETE) {
-        if (g_v28_history_fbo) glDeleteFramebuffers(1, &g_v28_history_fbo);
-        if (g_v28_history_texture) glDeleteTextures(1, &g_v28_history_texture);
-        g_v28_history_fbo = 0;
-        g_v28_history_texture = 0;
-        g_v27_failed = true;
-        pthread_mutex_unlock(&g_v27_mutex);
-        return false;
-    }
+    // V2.8 temporal history is allocated lazily by v27_ensure_history().
+    // Do not reserve a full-resolution history texture/FBO during module init when
+    // temporal is disabled. When temporal is enabled, the existing history object
+    // is reused for every frame and is created only once for the current dimensions.
+    g_v28_history_texture = 0;
+    g_v28_history_fbo = 0;
     g_v28_history_valid = false;
 
     static const GLfloat quad[] = {
@@ -1330,6 +1370,11 @@ static void v27_write_runtime_report() {
     out += "fbo=" + std::to_string((unsigned int)g_v27_fbo) + "\n";
     out += "history_texture=" + std::to_string((unsigned int)g_v28_history_texture) + "\n";
     out += "history_fbo=" + std::to_string((unsigned int)g_v28_history_fbo) + "\n";
+    out += "vibrance=" + std::to_string(g_v6_vibrance_value) + "\n";
+    out += "anisotropic_enhancement=" + std::to_string(g_v6_anisotropic_value) + "\n";
+    out += "frame_buffer_optimization=" + std::to_string(g_v6_frame_buffer_optimization_value ? 1 : 0) + "\n";
+    out += "adaptive_texture_enhancement=" + std::to_string(g_v6_adaptive_texture_value) + "\n";
+    out += "hdr_enhancement=" + std::to_string(g_v6_hdr_value) + "\n";
 
     const std::string base = g_app_files_dir + "/danzku_v40_runtime_" + std::to_string((int)getpid());
     // Keep the existing .txt as the latest snapshot.
@@ -1360,13 +1405,35 @@ static void v27_ram_optimize_history() {
     if (!g_ram_optimization_value || g_v28_temporal_value) return;
     if (g_v28_history_fbo) { glDeleteFramebuffers(1, &g_v28_history_fbo); g_v28_history_fbo = 0; }
     if (g_v28_history_texture) { glDeleteTextures(1, &g_v28_history_texture); g_v28_history_texture = 0; }
+    g_v28_history_width = 0;
+    g_v28_history_height = 0;
     g_v28_history_valid = false;
 }
 
 static bool v27_ensure_history() {
     if (!g_v28_temporal_value) return false;
-    if (g_v28_history_texture && g_v28_history_fbo) return true;
     if (g_v27_width <= 0 || g_v27_height <= 0) return false;
+
+    // Reuse the existing full-resolution history allocation for every frame.
+    // Only recreate it if the module's internal dimensions actually changed.
+    if (g_v28_history_texture && g_v28_history_fbo &&
+        g_v28_history_width == g_v27_width &&
+        g_v28_history_height == g_v27_height) {
+        return true;
+    }
+
+    // A size change requires a new allocation; release the old pair exactly once.
+    if (g_v28_history_fbo) {
+        glDeleteFramebuffers(1, &g_v28_history_fbo);
+        g_v28_history_fbo = 0;
+    }
+    if (g_v28_history_texture) {
+        glDeleteTextures(1, &g_v28_history_texture);
+        g_v28_history_texture = 0;
+    }
+    g_v28_history_width = 0;
+    g_v28_history_height = 0;
+
     glGenTextures(1, &g_v28_history_texture);
     glBindTexture(GL_TEXTURE_2D, g_v28_history_texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -1384,8 +1451,12 @@ static bool v27_ensure_history() {
         if (g_v28_history_texture) glDeleteTextures(1, &g_v28_history_texture);
         g_v28_history_fbo = 0;
         g_v28_history_texture = 0;
+        g_v28_history_width = 0;
+        g_v28_history_height = 0;
         return false;
     }
+    g_v28_history_width = g_v27_width;
+    g_v28_history_height = g_v27_height;
     g_v28_history_valid = false;
     return true;
 }
@@ -1397,6 +1468,8 @@ static void v27_release_resources() {
     if (g_v27_texture) { glDeleteTextures(1, &g_v27_texture); g_v27_texture = 0; }
     if (g_v28_history_texture) { glDeleteTextures(1, &g_v28_history_texture); g_v28_history_texture = 0; }
     if (g_v27_vbo) { glDeleteBuffers(1, &g_v27_vbo); g_v27_vbo = 0; }
+    g_v28_history_width = 0;
+    g_v28_history_height = 0;
     g_v28_history_valid = false;
     g_v27_initialized = false;
     g_v27_failed = false;
@@ -1700,6 +1773,10 @@ static bool v27_process_frame(EGLSurface surface) {
     glUniform1f(g_v5_lighting, proof_lighting);
     glUniform1f(g_v5_effect, proof_effect);
     glUniform1f(g_v5_saturation, proof_saturation);
+    glUniform1f(g_v6_vibrance, visual_proof_bypass ? 0.0f : g_v6_vibrance_value);
+    glUniform1f(g_v6_anisotropic, visual_proof_bypass ? 0.0f : g_v6_anisotropic_value);
+    glUniform1f(g_v6_adaptive_texture, visual_proof_bypass ? 0.0f : g_v6_adaptive_texture_value);
+    glUniform1f(g_v6_hdr, visual_proof_bypass ? 0.0f : g_v6_hdr_value);
     glBindBuffer(GL_ARRAY_BUFFER, g_v27_vbo);
     glEnableVertexAttribArray((GLuint)g_v27_pos);
     glEnableVertexAttribArray((GLuint)g_v27_uv);
@@ -1735,6 +1812,17 @@ static bool v27_process_frame(EGLSurface surface) {
             g_v28_history_valid = false;
             g_v27_last_error = history_err;
         }
+    }
+
+    // Frame-buffer optimization: invalidate transient attachment contents that are
+    // no longer needed by DanzKu. This is a tile-memory/buffer-lifecycle hint;
+    // it does not change the pixels presented or the persistent temporal history.
+    if (g_v6_frame_buffer_optimization_value && g_v27_fbo) {
+        const GLenum transientAttachments[] = { GL_COLOR_ATTACHMENT0 };
+        glBindFramebuffer(GL_FRAMEBUFFER, g_v27_fbo);
+        glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, transientAttachments);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(old_read_fbo));
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(old_draw_fbo));
     }
 
     glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(old_array));

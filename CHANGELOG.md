@@ -44,3 +44,18 @@ Previous V5.2.20 behavior remains the fallback when the output-stage guard is no
 - Android/GitHub Actions APK build: not executed locally in this environment; use the included workflow for authoritative compilation.
 
 - Added APK controls for RAM Optimization and FPS Boost. RAM optimization releases inactive temporal history resources; FPS boost reduces runtime polling/report overhead without changing visual shader parameters.
+
+
+## V5.2.26 RAM lifecycle optimization
+- Temporal history texture/FBO is now allocated lazily only when temporal processing is enabled.
+- Existing history allocation is reused across frames and only recreated when internal dimensions actually change.
+- History dimensions are tracked to prevent stale-size reuse after a resize.
+- No visual quality parameters, reconstruction resolution, history precision, or temporal strength were reduced.
+
+## V5.2.26 Game Visual Extensions
+- Added Vibrance control.
+- Added Anisotropic Visual Enhancement control (shader-side approximation, not Mali driver AF).
+- Added Frame Buffer Optimization using transient framebuffer invalidation hints while preserving persistent temporal history.
+- Added Adaptive Texture Enhancement control.
+- Added HDR Enhancement (SDR/HDR-like tone/detail enhancement; not a display-mode HDR switch).
+- Added APK controls for all five features.

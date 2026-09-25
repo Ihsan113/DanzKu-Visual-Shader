@@ -2688,7 +2688,10 @@ static void run_media_got_diagnostic(const std::string& package_name) {
     g_media_diag_failure.clear();
 
     MediaGotDiagContext ctx{};
-    ctx.path_filter = package_name.c_str();
+    // The media importer is a system library (libandroid_runtime.so), so the
+    // YouTube package name must NOT be used as a filesystem-path filter.
+    // Keep this diagnostic aligned with the actual media hook candidate.
+    ctx.path_filter = nullptr;
     ctx.symbol_name = "eglSwapBuffers";
     dl_iterate_phdr(media_got_diag_callback, &ctx);
 
@@ -2748,12 +2751,16 @@ static void emit_aarch64_absolute_jump(uint32_t* dst, void* target) {
 static bool install_media_got_hook(std::string& detail, void** got_address,
                                       void** original, void** value_after_patch,
                                       const std::string& package_name) {
-    // Media uses only an app/process-local GOT relocation. We deliberately do
-    // not patch the system libEGL text section. If YouTube has no suitable
-    // private relocation, fail closed and leave the process untouched.
+    // Media uses only the process-local GOT relocation of the loaded
+    // libandroid_runtime.so importer. We deliberately do not patch the
+    // system libEGL text section or libGLES_mali text. The diagnostic proved
+    // that libandroid_runtime.so imports eglSwapBuffers through a JUMP_SLOT.
     GotPatchContext ctx{};
-    ctx.library_name = nullptr;
-    ctx.path_filter = package_name.c_str();
+    // YouTube's eglSwapBuffers import was proven to live in
+    // libandroid_runtime.so. It is a system library, so filtering by the
+    // application package path would exclude the exact importer we need.
+    ctx.library_name = "libandroid_runtime.so";
+    ctx.path_filter = nullptr;
     ctx.symbol_name = "eglSwapBuffers";
     ctx.replacement = reinterpret_cast<void*>(hooked_eglSwapBuffers);
     ctx.original_out = original;

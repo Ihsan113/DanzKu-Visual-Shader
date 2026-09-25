@@ -1,3 +1,7 @@
+## Diagnostic worker breadcrumbs
+- Added `danzku_media_diag_<PID>.txt` breadcrumbs for Media worker startup, target gate, EGL resolution, identity gate, GOT install result, and worker exit.
+- Diagnostic-only; Game rendering path and Media Probe remain unchanged.
+
 # V5.2.26 — Media Separation / FC Hardening
 
 - Removes Media Probe and its libEGL inline fallback.

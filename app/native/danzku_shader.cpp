@@ -487,7 +487,7 @@ static bool g_ram_optimization_value = true;
 static bool g_fps_boost_value = true;
 // Media probe is opt-in and observational. It is OFF by default so existing
 // Unity/game rendering behavior remains unchanged unless explicitly enabled.
-static bool false = false;
+// Media Probe removed: no probe state or hook is used.
 // Media Engine is a separate, opt-in EGL-only profile for the configured media target.
 // It never hooks Codec2, BufferQueue, DRM, or protected decoder paths.
 static bool g_media_engine_value = false;
@@ -509,8 +509,36 @@ static float g_media_local_contrast_value = 0.10f;
 static float g_media_vibrance_value = 0.12f;
 static float g_media_adaptive_detail_value = 0.08f;
 static float g_media_skin_protection_value = 0.75f;
-static volatile bool static volatile unsigned long long g_media_frame_candidates = 0;
+static volatile unsigned long long g_media_frame_candidates = 0;
 static volatile unsigned long long g_media_frame_processed = 0;
+
+static void write_media_worker_diag(const char* stage, int attempt = 0, const char* detail = nullptr) {
+    if (!g_v27_logging_value || g_app_files_dir.empty()) return;
+    char path[512] = {};
+    snprintf(path, sizeof(path), "%s/danzku_media_diag_%d.txt",
+             g_app_files_dir.c_str(), (int)getpid());
+    std::string out;
+    out += "stage=";
+    out += stage ? stage : "(null)";
+    out += "\n";
+    out += "pid=" + std::to_string((int)getpid()) + "\n";
+    out += "attempt=" + std::to_string(attempt) + "\n";
+    out += "target=" + g_target_name + "\n";
+    out += "media_engine=" + std::to_string(g_media_engine_value ? 1 : 0) + "\n";
+    out += "media_target_package=" + g_media_target_package + "\n";
+    out += "media_target_match=" +
+           std::to_string((g_media_engine_value && !g_media_target_package.empty() &&\n                            base_package_name(g_target_name) == g_media_target_package) ? 1 : 0) + "\n";
+    out += "codec2_present=" + std::to_string(g_media_codec2_present ? 1 : 0) + "\n";
+    out += "bufferqueue_present=" + std::to_string(g_media_bufferqueue_present ? 1 : 0) + "\n";
+    out += "hook_installed=" + std::to_string(g_hook_installed ? 1 : 0) + "\n";
+    out += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\n";
+    if (detail && *detail) {
+        out += "detail=";
+        out += detail;
+        out += "\n";
+    }
+    write_file(path, out);
+}
 static volatile unsigned long long g_v27_process_calls = 0;
 static volatile unsigned long long g_v27_process_success = 0;
 static volatile unsigned long long g_v27_process_skip = 0;
@@ -2578,18 +2606,35 @@ public:
     }
 
     static void* hook_worker(void*) {
+        write_media_worker_diag("worker_start", 0, "pthread_worker_entered");
         for (int attempt = 1; attempt <= 12; ++attempt) {
             usleep(500000);
             bool unity = maps_has("libunity.so");
-            if (!unity && !(g_media_engine_value && base_package_name(g_target_name) == g_media_target_package)) continue;
+            const bool media_target =
+                g_media_engine_value && !g_media_target_package.empty() &&
+                base_package_name(g_target_name) == g_media_target_package;
+
+            char gate_detail[256] = {};
+            snprintf(gate_detail, sizeof(gate_detail),
+                     "unity=%d media_target=%d",
+                     unity ? 1 : 0, media_target ? 1 : 0);
+            write_media_worker_diag("attempt_gate", attempt, gate_detail);
+
+            if (!unity && !media_target) {
+                write_media_worker_diag("attempt_skipped", attempt, "target_gate_not_ready");
+                continue;
+            }
 
             void* handle = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
             void* resolved = handle ? dlsym(handle, "eglSwapBuffers") : nullptr;
             if (handle) dlclose(handle);
             if (!resolved) {
+                write_media_worker_diag("egl_resolve_fail", attempt, "dlsym_eglSwapBuffers_failed");
                 write_hook_report("resolve_fail", g_target_name, "dlsym_failed", resolved, nullptr);
+                write_media_worker_diag("worker_exit", attempt, "resolve_failed");
                 return nullptr;
             }
+            write_media_worker_diag("egl_resolve_ok", attempt, "dlsym_eglSwapBuffers_ok");
 
             std::string detail;
             void* got = nullptr;
@@ -2603,12 +2648,30 @@ public:
                 g_media_bufferqueue_present =
                     maps_has("android.hardware.graphics.bufferqueue@2.0.so") ||
                     maps_has("android.hardware.graphics.bufferqueue@1.0.so");
+                char media_gate[256] = {};
+                snprintf(media_gate, sizeof(media_gate),
+                         "codec2=%d bufferqueue=%d require_codec2=%d",
+                         g_media_codec2_present ? 1 : 0,
+                         g_media_bufferqueue_present ? 1 : 0,
+                         g_media_require_codec2 ? 1 : 0);
+                write_media_worker_diag("media_identity_gate", attempt, media_gate);
             }
+            write_media_worker_diag("got_install_start", attempt, unity ? "game_path" : "media_path");
             bool ok = unity
                 ? install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after)
                 : install_media_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after, package_name);
             g_hook_installed = ok && g_orig_eglSwapBuffers != nullptr;
             g_media_engine_active = ok && !unity && media_engine_target;
+            {
+                char result[512] = {};
+                snprintf(result, sizeof(result),
+                         "ok=%d orig=%s detail=%s",
+                         ok ? 1 : 0,
+                         g_orig_eglSwapBuffers ? "YES" : "NO",
+                         detail.c_str());
+                write_media_worker_diag(ok ? "got_install_ok" : "got_install_fail",
+                                        attempt, result);
+            }
             if (ok) {
                 write_hook_report(unity ? "install" : "media_install",
                                   g_target_name, detail.c_str(), resolved, got,
@@ -2630,12 +2693,15 @@ public:
                         (unsigned long long)g_hook_calls);
                     if (g_v27_logging_value) write_file(path, out);
                 }
+                write_media_worker_diag("worker_exit", attempt, "hook_installed");
                 return nullptr;
             }
             if (attempt == 12) {
                 write_hook_report("install_fail", g_target_name, detail.c_str(), resolved, got, reinterpret_cast<void*>(g_orig_eglSwapBuffers), got_after);
+                write_media_worker_diag("worker_exit", attempt, "install_failed_after_12_attempts");
             }
         }
+        write_media_worker_diag("worker_exit", 12, "loop_finished_without_hook");
         return nullptr;
     }
 private:

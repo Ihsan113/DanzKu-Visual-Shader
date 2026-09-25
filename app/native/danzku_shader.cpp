@@ -194,16 +194,6 @@ using EglSwapBuffersFn = EGLBoolean (*)(EGLDisplay, EGLSurface);
 static EglSwapBuffersFn g_orig_eglSwapBuffers = nullptr;
 static volatile unsigned long long g_hook_calls = 0;
 
-// Media Probe fallback: some non-Unity apps (including media players) do not
-// expose an app-owned PLT/GOT relocation for eglSwapBuffers. In that case the
-// probe can optionally install a process-local AArch64 trampoline on the
-// libEGL export itself. This path is probe-only and is never used by the
-// existing Unity/game path.
-static void* g_media_inline_trampoline = nullptr;
-static void* g_media_inline_target = nullptr;
-static bool g_media_inline_installed = false;
-static size_t g_media_inline_patch_size = 16;
-
 static volatile bool g_hook_installed = false;
 
 // V5.2 frame telemetry: read-only measurement around the proven eglSwapBuffers hook.
@@ -497,7 +487,7 @@ static bool g_ram_optimization_value = true;
 static bool g_fps_boost_value = true;
 // Media probe is opt-in and observational. It is OFF by default so existing
 // Unity/game rendering behavior remains unchanged unless explicitly enabled.
-static bool g_media_probe_value = false;
+static bool false = false;
 // Media Engine is a separate, opt-in EGL-only profile for the configured media target.
 // It never hooks Codec2, BufferQueue, DRM, or protected decoder paths.
 static bool g_media_engine_value = false;
@@ -519,8 +509,7 @@ static float g_media_local_contrast_value = 0.10f;
 static float g_media_vibrance_value = 0.12f;
 static float g_media_adaptive_detail_value = 0.08f;
 static float g_media_skin_protection_value = 0.75f;
-static volatile bool g_media_probe_active = false;
-static volatile unsigned long long g_media_frame_candidates = 0;
+static volatile bool static volatile unsigned long long g_media_frame_candidates = 0;
 static volatile unsigned long long g_media_frame_processed = 0;
 static volatile unsigned long long g_v27_process_calls = 0;
 static volatile unsigned long long g_v27_process_success = 0;
@@ -606,6 +595,72 @@ static std::string read_small_config() {
 }
 
 
+
+static uint64_t g_media_config_mtime_ns = 0;
+static off_t g_media_config_size = 0;
+
+static std::string media_config_file_path() {
+    const char* paths[] = {
+        "/data/adb/modules/danzku_visual_shader/config/media.conf",
+        "/proc/self/root/data/adb/modules/danzku_visual_shader/config/media.conf",
+        "/data/local/tmp/danzku_media_config"
+    };
+    for (const char* path : paths) {
+        struct stat st{};
+        if (stat(path, &st) == 0) return std::string(path);
+    }
+    return "";
+}
+
+static std::string read_media_config() {
+    const std::string path = media_config_file_path();
+    if (path.empty()) return "";
+    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return "";
+    char buf[4096] = {};
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    return n > 0 ? std::string(buf, static_cast<size_t>(n)) : "";
+}
+
+static void parse_media_config() {
+    const std::string cfg = read_media_config();
+    if (cfg.empty()) return;
+    size_t start = 0;
+    while (start < cfg.size()) {
+        size_t end = cfg.find('\n', start);
+        if (end == std::string::npos) end = cfg.size();
+        std::string line = cfg.substr(start, end - start);
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
+        size_t eq = line.find('=');
+        if (eq != std::string::npos) {
+            std::string key = line.substr(0, eq);
+            std::string val = line.substr(eq + 1);
+            if (key == "media_engine") g_media_engine_value = atoi(val.c_str()) != 0;
+            else if (key == "media_require_codec2") g_media_require_codec2 = atoi(val.c_str()) != 0;
+            else if (key == "media_min_width") g_media_min_width = std::max(1, atoi(val.c_str()));
+            else if (key == "media_min_height") g_media_min_height = std::max(1, atoi(val.c_str()));
+            else if (key == "media_aspect_tolerance") g_media_aspect_tolerance = strtof(val.c_str(), nullptr);
+            else if (key == "media_target_package") g_media_target_package = trim_copy(val);
+            else if (key == "media_tone_mapping") g_media_tone_mapping_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_highlight_recovery") g_media_highlight_recovery_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_shadow_lift") g_media_shadow_lift_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_local_contrast") g_media_local_contrast_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_vibrance") g_media_vibrance_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_adaptive_detail") g_media_adaptive_detail_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_skin_protection") g_media_skin_protection_value = strtof(val.c_str(), nullptr);
+        }
+        start = end + 1;
+    }
+    g_media_tone_mapping_value = std::max(0.0f, std::min(1.0f, g_media_tone_mapping_value));
+    g_media_highlight_recovery_value = std::max(0.0f, std::min(1.0f, g_media_highlight_recovery_value));
+    g_media_shadow_lift_value = std::max(0.0f, std::min(1.0f, g_media_shadow_lift_value));
+    g_media_local_contrast_value = std::max(0.0f, std::min(1.0f, g_media_local_contrast_value));
+    g_media_vibrance_value = std::max(0.0f, std::min(1.0f, g_media_vibrance_value));
+    g_media_adaptive_detail_value = std::max(0.0f, std::min(1.0f, g_media_adaptive_detail_value));
+    g_media_skin_protection_value = std::max(0.0f, std::min(1.0f, g_media_skin_protection_value));
+}
+
 static volatile int g_v27_config_read_success = 0;
 static volatile int g_v27_config_parse_success = 0;
 static volatile unsigned long long g_v27_config_sync_count = 0;
@@ -683,20 +738,6 @@ static void parse_v27_config() {
             else if (key == "hdr_enhancement") g_v6_hdr_value = strtof(val.c_str(), nullptr);
             else if (key == "ram_optimization") g_ram_optimization_value = (atoi(val.c_str()) != 0);
             else if (key == "fps_boost") g_fps_boost_value = (atoi(val.c_str()) != 0);
-            else if (key == "media_probe") g_media_probe_value = (atoi(val.c_str()) != 0);
-            else if (key == "media_engine") g_media_engine_value = (atoi(val.c_str()) != 0);
-            else if (key == "media_require_codec2") g_media_require_codec2 = (atoi(val.c_str()) != 0);
-            else if (key == "media_min_width") g_media_min_width = std::max(1, atoi(val.c_str()));
-            else if (key == "media_min_height") g_media_min_height = std::max(1, atoi(val.c_str()));
-            else if (key == "media_aspect_tolerance") g_media_aspect_tolerance = strtof(val.c_str(), nullptr);
-            else if (key == "media_target_package") g_media_target_package = trim_copy(val);
-            else if (key == "media_tone_mapping") g_media_tone_mapping_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_highlight_recovery") g_media_highlight_recovery_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_shadow_lift") g_media_shadow_lift_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_local_contrast") g_media_local_contrast_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_vibrance") g_media_vibrance_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_adaptive_detail") g_media_adaptive_detail_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_skin_protection") g_media_skin_protection_value = strtof(val.c_str(), nullptr);
             if (key == "enabled" || key == "logging" || key == "sharpen" || key == "clarity" ||
                 key == "temporal" || key == "temporal_strength" || key == "motion_aware" ||
                 key == "motion_threshold" || key == "motion_softness" || key == "material_detail" ||
@@ -714,12 +755,7 @@ static void parse_v27_config() {
                 key == "lighting_enhancement" || key == "effect_enhancement" || key == "saturation" ||
                 key == "vibrance" || key == "anisotropic_enhancement" || key == "frame_buffer_optimization" ||
                 key == "adaptive_texture_enhancement" || key == "hdr_enhancement" ||
-                key == "media_probe" || key == "media_engine" || key == "media_require_codec2" ||
-                 key == "media_min_width" || key == "media_min_height" || key == "media_aspect_tolerance" ||
-                 key == "media_target_package" ||
-                key == "media_tone_mapping" || key == "media_highlight_recovery" || key == "media_shadow_lift" ||
-                key == "media_local_contrast" || key == "media_vibrance" || key == "media_adaptive_detail" ||
-                key == "media_skin_protection" || key == "ram_optimization" || key == "fps_boost") {
+key == "ram_optimization" || key == "fps_boost") {
                 g_v27_config_parse_success = 1;
             }
         }
@@ -814,6 +850,7 @@ static void parse_v27_config() {
     if (g_media_adaptive_detail_value > 1.0f) g_media_adaptive_detail_value = 1.0f;
     if (g_media_skin_protection_value < 0.0f) g_media_skin_protection_value = 0.0f;
     if (g_media_skin_protection_value > 1.0f) g_media_skin_protection_value = 1.0f;
+    parse_media_config();
 }
 
 
@@ -866,12 +903,23 @@ static bool reload_v27_config_if_changed(bool force = false) {
     const uint64_t mtime_ns =
         static_cast<uint64_t>(st.st_mtim.tv_sec) * 1000000000ULL +
         static_cast<uint64_t>(st.st_mtim.tv_nsec);
-    const bool config_changed = force || mtime_ns != g_v27_config_mtime_ns || st.st_size != g_v27_config_size;
+    const std::string media_path = media_config_file_path();
+    struct stat media_st{};
+    const bool media_stat_ok = !media_path.empty() && stat(media_path.c_str(), &media_st) == 0;
+    const uint64_t media_mtime_ns = media_stat_ok
+        ? static_cast<uint64_t>(media_st.st_mtim.tv_sec) * 1000000000ULL +
+          static_cast<uint64_t>(media_st.st_mtim.tv_nsec) : 0ULL;
+    const off_t media_size = media_stat_ok ? media_st.st_size : 0;
+    const bool config_changed = force ||
+        mtime_ns != g_v27_config_mtime_ns || st.st_size != g_v27_config_size ||
+        media_mtime_ns != g_media_config_mtime_ns || media_size != g_media_config_size;
     const bool old_enabled = g_v27_enabled_value;
     if (config_changed) {
         parse_v27_config();
         g_v27_config_mtime_ns = mtime_ns;
         g_v27_config_size = st.st_size;
+        g_media_config_mtime_ns = media_mtime_ns;
+        g_media_config_size = media_size;
     }
     const bool control_changed = apply_v27_native_control() && old_enabled != g_v27_enabled_value;
     return config_changed || control_changed;
@@ -946,7 +994,7 @@ static GLuint v27_compile_shader(GLenum type, const char* source) {
     return shader;
 }
 
-static bool v27_init(int width, int height) {
+static bool v27_init(int width, int height, bool media_mode_init = false) {
     pthread_mutex_lock(&g_v27_mutex);
     if (g_v27_initialized) { pthread_mutex_unlock(&g_v27_mutex); return true; }
     if (g_v27_failed || width <= 0 || height <= 0) { pthread_mutex_unlock(&g_v27_mutex); return false; }
@@ -965,7 +1013,7 @@ static bool v27_init(int width, int height) {
     }
     g_v27_width = width;
     g_v27_height = height;
-    if (!g_v27_enabled_value) {
+    if (!g_v27_enabled_value && !(media_mode_init && g_media_engine_active)) {
         pthread_mutex_unlock(&g_v27_mutex);
         return false;
     }
@@ -1563,8 +1611,6 @@ static void v27_write_runtime_report() {
     out += "frame_buffer_optimization=" + std::to_string(g_v6_frame_buffer_optimization_value ? 1 : 0) + "\n";
     out += "adaptive_texture_enhancement=" + std::to_string(g_v6_adaptive_texture_value) + "\n";
     out += "hdr_enhancement=" + std::to_string(g_v6_hdr_value) + "\n";
-    out += "media_probe=" + std::to_string(g_media_probe_value ? 1 : 0) + "\n";
-    out += "media_probe_active=" + std::to_string(g_media_probe_active ? 1 : 0) + "\n";
     out += "media_engine=" + std::to_string(g_media_engine_value ? 1 : 0) + "\n";
     out += "media_engine_active=" + std::to_string(g_media_engine_active ? 1 : 0) + "\n";
     out += "media_engine_route=codec2_identity_gate_plus_egl_framebuffer\n";
@@ -1688,6 +1734,7 @@ static void v27_release_resources() {
 }
 
 static bool v27_process_frame(EGLSurface surface) {
+    const bool media_mode_active = g_media_engine_active && media_engine_target_matches();
     ++g_v27_process_calls;
     EGLDisplay dpy = eglGetCurrentDisplay();
     EGLint surface_width = 0, surface_height = 0;
@@ -1699,7 +1746,8 @@ static bool v27_process_frame(EGLSurface surface) {
         surface_width > 0 && surface_height > 0;
     g_v27_last_surface_width = surface_ok ? surface_width : 0;
     g_v27_last_surface_height = surface_ok ? surface_height : 0;
-    if (!g_v27_enabled_value || !g_v27_initialized || !g_v27_program || !g_v27_texture || !g_v27_vbo || !g_v27_fbo) {
+    if ((!g_v27_enabled_value && !media_mode_active) || !g_v27_initialized ||
+        !g_v27_program || !g_v27_texture || !g_v27_vbo || !g_v27_fbo) {
         ++g_v27_process_skip;
         ++g_v27_skip_not_ready;
         v27_maybe_write_runtime_report();
@@ -1895,7 +1943,7 @@ static bool v27_process_frame(EGLSurface surface) {
         // texture using its own texel size and the final draw covers the real surface.
         glViewport(0, 0, surface_width, surface_height);
     }
-    const bool media_mode = g_media_engine_active && media_engine_target_matches();
+    const bool media_mode = media_mode_active;
     // Keep the existing valid history texture binding for shader safety, but force
     // temporal contribution to zero in media mode; this avoids changing the proven
     // resource lifecycle while keeping the media profile spatial/lightweight.
@@ -2151,34 +2199,17 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     const bool config_changed = reload_v27_config_if_changed(false);
     if (was_enabled && !g_v27_enabled_value && g_v27_initialized) v27_release_resources();
     if (config_changed) v27_write_runtime_report();
-    if (g_v27_enabled_value && !g_media_probe_active) update_fps_telemetry();
+    if (g_v27_enabled_value) update_fps_telemetry();
     ++g_hook_calls;
     if (g_media_engine_active && media_engine_target_matches()) {
         EGLint w = 0, h = 0;
         const bool candidate = media_surface_candidate(dpy, surface, &w, &h);
         if (candidate) {
             ++g_media_frame_candidates;
-            if (g_v27_enabled_value && !g_v27_initialized) v27_init((int)w, (int)h);
-            if (g_v27_initialized && g_v27_enabled_value && v27_process_frame(surface)) {
+            if (!g_v27_initialized) v27_init((int)w, (int)h, true);
+            if (g_v27_initialized && v27_process_frame(surface)) {
                 ++g_media_frame_processed;
             }
-        }
-        if (g_orig_eglSwapBuffers) return g_orig_eglSwapBuffers(dpy, surface);
-        return EGL_FALSE;
-    }
-    if (g_media_probe_active) {
-        // Media mode is deliberately probe-only in this revision. It never calls
-        // the visual shader/reconstruction pipeline and never changes framebuffer
-        // contents, textures, viewport, or swap behavior.
-        static volatile bool media_probe_done = false;
-        if (!media_probe_done) {
-            media_probe_done = true;
-            std::string report = "stage=media_probe\n";
-            report += "pid=" + std::to_string((int)getpid()) + "\n";
-            report += "target=" + g_target_name + "\n";
-            report += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\n";
-            append_egl_gl_probe(report, dpy, surface);
-            write_file(g_app_files_dir + "/danzku_media_probe_" + std::to_string((int)getpid()) + ".txt", report);
         }
         if (g_orig_eglSwapBuffers) return g_orig_eglSwapBuffers(dpy, surface);
         return EGL_FALSE;
@@ -2451,98 +2482,12 @@ static void emit_aarch64_absolute_jump(uint32_t* dst, void* target) {
         reinterpret_cast<uint64_t>(target);
 }
 
-static bool install_media_probe_inline_hook(std::string& detail, void* resolved,
-                                             void** original) {
-#if defined(__aarch64__)
-    if (!resolved || !original) {
-        detail = "media_inline_invalid_target";
-        return false;
-    }
-
-    Dl_info info{};
-    if (dladdr(resolved, &info) == 0 || !info.dli_fname) {
-        detail = "media_inline_dladdr_failed";
-        return false;
-    }
-
-    // Only allow the dedicated media fallback on the Android EGL loader.
-    // Never patch Mali/vendor GLES or any unrelated system library.
-    const std::string path = info.dli_fname;
-    if (path != "/system/lib64/libEGL.so") {
-        detail = "media_inline_not_libEGL";
-        return false;
-    }
-
-    auto* target = reinterpret_cast<uint8_t*>(resolved);
-    if ((reinterpret_cast<uintptr_t>(target) & 0x3u) != 0) {
-        detail = "media_inline_unaligned";
-        return false;
-    }
-
-    uint32_t original_words[4] = {};
-    memcpy(original_words, target, sizeof(original_words));
-    if (!aarch64_prologue_is_relocatable(original_words, 4)) {
-        detail = "media_inline_nonrelocatable_prologue";
-        return false;
-    }
-
-    const size_t page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
-    const uintptr_t page =
-        reinterpret_cast<uintptr_t>(target) &
-        ~(static_cast<uintptr_t>(page_size) - 1u);
-
-    // Allocate an executable trampoline. Start RW and switch to RX before use.
-    void* tramp = mmap(nullptr, 64, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (tramp == MAP_FAILED) {
-        detail = "media_inline_trampoline_mmap_failed";
-        return false;
-    }
-
-    auto* tramp_words = reinterpret_cast<uint32_t*>(tramp);
-    memcpy(tramp_words, original_words, sizeof(original_words));
-    emit_aarch64_absolute_jump(tramp_words + 4, target + 16);
-
-    if (mprotect(tramp, 64, PROT_READ | PROT_EXEC) != 0) {
-        munmap(tramp, 64);
-        detail = "media_inline_trampoline_mprotect_failed";
-        return false;
-    }
-
-    if (mprotect(reinterpret_cast<void*>(page), page_size,
-                 PROT_READ | PROT_WRITE) != 0) {
-        munmap(tramp, 64);
-        detail = "media_inline_target_mprotect_failed";
-        return false;
-    }
-
-    emit_aarch64_absolute_jump(reinterpret_cast<uint32_t*>(target),
-                               reinterpret_cast<void*>(hooked_eglSwapBuffers));
-    __builtin___clear_cache(reinterpret_cast<char*>(target),
-                            reinterpret_cast<char*>(target + 16));
-
-    // Restore executable-only permissions on the target code page.
-    (void)mprotect(reinterpret_cast<void*>(page), page_size, PROT_READ | PROT_EXEC);
-
-    g_media_inline_target = resolved;
-    g_media_inline_trampoline = tramp;
-    g_media_inline_installed = true;
-    *original = tramp;
-    detail = std::string("media_inline_hook_ok:") + path;
-    return true;
-#else
-    (void)resolved;
-    (void)original;
-    detail = "media_inline_arm64_only";
-    return false;
-#endif
-}
-
-static bool install_media_probe_got_hook(std::string& detail, void** got_address,
-                                           void** original, void** value_after_patch,
-                                           const std::string& package_name) {
-    // First try the least invasive path: an app/private GOT relocation.
-    // This is the same mechanism used by the stable Unity path.
+static bool install_media_got_hook(std::string& detail, void** got_address,
+                                      void** original, void** value_after_patch,
+                                      const std::string& package_name) {
+    // Media uses only an app/process-local GOT relocation. We deliberately do
+    // not patch the system libEGL text section. If YouTube has no suitable
+    // private relocation, fail closed and leave the process untouched.
     GotPatchContext ctx{};
     ctx.library_name = nullptr;
     ctx.path_filter = package_name.c_str();
@@ -2553,29 +2498,10 @@ static bool install_media_probe_got_hook(std::string& detail, void** got_address
     if (got_address) *got_address = ctx.found_got;
     if (value_after_patch) *value_after_patch = ctx.value_after_patch;
     if (ctx.success) {
-        detail = std::string("media_probe_got_ok:") + (ctx.path ? ctx.path : "(unknown)");
+        detail = std::string("media_got_ok:") + (ctx.path ? ctx.path : "(unknown)");
         return true;
     }
-
-    // Non-Unity media applications can call eglSwapBuffers through a system
-    // EGL export without having an app-owned PLT relocation. The dedicated
-    // media fallback hooks only the libEGL export in this process. It never
-    // patches libGLES_mali.so/vendor code and is never used for Unity.
-    void* handle = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
-    void* resolved = handle ? dlsym(handle, "eglSwapBuffers") : nullptr;
-    if (handle) dlclose(handle);
-
-    std::string inline_detail;
-    if (install_media_probe_inline_hook(inline_detail, resolved, original)) {
-        if (got_address) *got_address = nullptr;
-        if (value_after_patch) *value_after_patch = nullptr;
-        detail = inline_detail;
-        return true;
-    }
-
-    detail = std::string("media_probe_no_hook:got=") +
-             (ctx.error ? ctx.error : "unknown") +
-             ",inline=" + inline_detail;
+    detail = std::string("media_got_no_hook:") + (ctx.error ? ctx.error : "unknown");
     return false;
 }
 
@@ -2655,8 +2581,7 @@ public:
         for (int attempt = 1; attempt <= 12; ++attempt) {
             usleep(500000);
             bool unity = maps_has("libunity.so");
-            bool egl = maps_has("libEGL.so");
-            if (!unity && !(g_media_probe_value || g_media_engine_value)) continue;
+            if (!unity && !(g_media_engine_value && base_package_name(g_target_name) == g_media_target_package)) continue;
 
             void* handle = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
             void* resolved = handle ? dlsym(handle, "eglSwapBuffers") : nullptr;
@@ -2670,7 +2595,6 @@ public:
             void* got = nullptr;
             g_orig_eglSwapBuffers = nullptr;
             void* got_after = nullptr;
-            g_media_probe_active = false;
             g_media_engine_active = false;
             const std::string package_name = base_package_name(g_target_name);
             const bool media_engine_target = g_media_engine_value && !g_media_target_package.empty() && package_name == g_media_target_package;
@@ -2682,12 +2606,11 @@ public:
             }
             bool ok = unity
                 ? install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after)
-                : install_media_probe_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after, package_name);
+                : install_media_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after, package_name);
             g_hook_installed = ok && g_orig_eglSwapBuffers != nullptr;
             g_media_engine_active = ok && !unity && media_engine_target;
-            g_media_probe_active = ok && !unity && g_media_probe_value && !g_media_engine_active;
             if (ok) {
-                write_hook_report(unity ? "install" : "media_probe_install",
+                write_hook_report(unity ? "install" : "media_install",
                                   g_target_name, detail.c_str(), resolved, got,
                                   reinterpret_cast<void*>(g_orig_eglSwapBuffers), got_after);
                 // Keep the process untouched otherwise; periodically verify that the

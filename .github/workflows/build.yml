@@ -68,6 +68,7 @@ jobs:
           cp module/service.sh dist/danzku_visual_shader/service.sh
           cp module/uninstall.sh dist/danzku_visual_shader/uninstall.sh
           cp module/config/visual.conf dist/danzku_visual_shader/config/visual.conf
+          cp module/config/media.conf dist/danzku_visual_shader/config/media.conf
           cp module/config/targets.conf dist/danzku_visual_shader/config/targets.conf
           chmod 0755 dist/danzku_visual_shader/service.sh dist/danzku_visual_shader/uninstall.sh
           cd dist

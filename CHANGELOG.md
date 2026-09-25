@@ -1,7 +1,15 @@
+# V5.2.26 — Media Separation / FC Hardening
+
+- Removes Media Probe and its libEGL inline fallback.
+- Separates YouTube Media Engine settings into `config/media.conf`.
+- Adds dedicated GAME and MEDIA/YOUTUBE monitor pages.
+- Fixes Media Engine toggle persistence/default handling.
+- Media hook now fails closed instead of patching system libEGL text.
+
 # V5.2.26 — Safe Media Probe
-- Adds an opt-in `media_probe=0` mode for non-Unity/media targets.
+- Previous media diagnostic mode is removed in this revision.
 - Media probe is diagnostic-only: it records EGL/GL context, surface size, renderer and swap activity without running the existing visual shader pipeline.
-- Existing Unity/game hook path is unchanged when `media_probe=0` (default).
+- Media now uses a separate fail-closed GOT-only path.
 
 # V5.2.26
 

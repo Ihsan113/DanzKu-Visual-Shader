@@ -69,3 +69,7 @@ V5.2.26 addresses the verified V5.2.16 skip condition without replacing the prov
 
 ## Safe Media Probe
 `media_probe=0` is OFF by default. Enable it only for a non-Unity target such as YouTube when testing EGL activity. The probe does not modify frames; it writes `danzku_media_probe_<PID>.txt` under the target app files directory.
+
+
+## Media Probe Safe Fallback
+For non-Unity media apps that do not expose an app-owned `eglSwapBuffers` PLT/GOT entry, the native module has an opt-in, process-local ARM64 `libEGL.so` fallback. It is used only when `media_probe=1` and no Unity renderer is present. The fallback is observational: it captures EGL/GL information and calls the original function without modifying frame contents. Unity/game rendering remains on the existing GOT hook path.

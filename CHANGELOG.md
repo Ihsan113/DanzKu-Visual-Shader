@@ -87,3 +87,9 @@ Previous V5.2.20 behavior remains the fallback when the output-stage guard is no
 - Monitor now enumerates every process matching a target package (including `:process` suffixes) and prefers a runtime report whose `pid=` matches the live process.
 - Prevents false `PID FOUND: YES` + `REPORT FOUND: NO` when the first process returned by `ps` is not the renderer process.
 - Dynamic package labels and target list behavior are preserved.
+
+## Media Probe Safe Fallback
+- Keeps the existing Unity/GOT `eglSwapBuffers` path unchanged.
+- Adds a media-only, process-local ARM64 fallback for `libEGL.so` when a non-Unity app has no app-owned `eglSwapBuffers` PLT/GOT relocation.
+- The fallback is probe-only: it records the EGL/GL state and immediately calls the original `eglSwapBuffers`; it never runs the V5.2.26 visual shader pipeline.
+- It never patches `libGLES_mali.so` or vendor GLES code.

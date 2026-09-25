@@ -193,6 +193,17 @@ static zygisk::Api* g_api = nullptr;
 using EglSwapBuffersFn = EGLBoolean (*)(EGLDisplay, EGLSurface);
 static EglSwapBuffersFn g_orig_eglSwapBuffers = nullptr;
 static volatile unsigned long long g_hook_calls = 0;
+
+// Media Probe fallback: some non-Unity apps (including media players) do not
+// expose an app-owned PLT/GOT relocation for eglSwapBuffers. In that case the
+// probe can optionally install a process-local AArch64 trampoline on the
+// libEGL export itself. This path is probe-only and is never used by the
+// existing Unity/game path.
+static void* g_media_inline_trampoline = nullptr;
+static void* g_media_inline_target = nullptr;
+static bool g_media_inline_installed = false;
+static size_t g_media_inline_patch_size = 16;
+
 static volatile bool g_hook_installed = false;
 
 // V5.2 frame telemetry: read-only measurement around the proven eglSwapBuffers hook.
@@ -2226,11 +2237,128 @@ static bool install_manual_got_hook(std::string& detail, void** got_address, voi
     return true;
 }
 
+
+static bool aarch64_prologue_is_relocatable(const uint32_t* insn, size_t count) {
+    // Reject instructions whose immediate is PC-relative or whose control flow
+    // would need relocation. We only copy a tiny prologue; if it is not plainly
+    // relocatable we fail closed and keep the original EGL path untouched.
+    for (size_t i = 0; i < count; ++i) {
+        const uint32_t x = insn[i];
+        const uint32_t top6 = x >> 26;
+        const bool b_or_bl = (top6 == 0x05 || top6 == 0x25);
+        const bool b_cond = ((x & 0xFF000010u) == 0x54000000u);
+        const bool cbz_cbnz = ((x & 0x7F000000u) == 0x34000000u);
+        const bool tbz_tbnz = ((x & 0x7F000000u) == 0x36000000u);
+        const bool adrp = ((x & 0x9F000000u) == 0x90000000u);
+        const bool adr = ((x & 0x9F000000u) == 0x10000000u);
+        const bool ldr_literal = ((x & 0x3B000000u) == 0x18000000u);
+        if (b_or_bl || b_cond || cbz_cbnz || tbz_tbnz || adrp || adr || ldr_literal) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void emit_aarch64_absolute_jump(uint32_t* dst, void* target) {
+    // ldr x17, #8 ; br x17 ; .quad target
+    dst[0] = 0x58000051u;
+    dst[1] = 0xD61F0220u;
+    *reinterpret_cast<uint64_t*>(dst + 2) =
+        reinterpret_cast<uint64_t>(target);
+}
+
+static bool install_media_probe_inline_hook(std::string& detail, void* resolved,
+                                             void** original) {
+#if defined(__aarch64__)
+    if (!resolved || !original) {
+        detail = "media_inline_invalid_target";
+        return false;
+    }
+
+    Dl_info info{};
+    if (dladdr(resolved, &info) == 0 || !info.dli_fname) {
+        detail = "media_inline_dladdr_failed";
+        return false;
+    }
+
+    // Only allow the dedicated media fallback on the Android EGL loader.
+    // Never patch Mali/vendor GLES or any unrelated system library.
+    const std::string path = info.dli_fname;
+    if (path != "/system/lib64/libEGL.so") {
+        detail = "media_inline_not_libEGL";
+        return false;
+    }
+
+    auto* target = reinterpret_cast<uint8_t*>(resolved);
+    if ((reinterpret_cast<uintptr_t>(target) & 0x3u) != 0) {
+        detail = "media_inline_unaligned";
+        return false;
+    }
+
+    uint32_t original_words[4] = {};
+    memcpy(original_words, target, sizeof(original_words));
+    if (!aarch64_prologue_is_relocatable(original_words, 4)) {
+        detail = "media_inline_nonrelocatable_prologue";
+        return false;
+    }
+
+    const size_t page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    const uintptr_t page =
+        reinterpret_cast<uintptr_t>(target) &
+        ~(static_cast<uintptr_t>(page_size) - 1u);
+
+    // Allocate an executable trampoline. Start RW and switch to RX before use.
+    void* tramp = mmap(nullptr, 64, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (tramp == MAP_FAILED) {
+        detail = "media_inline_trampoline_mmap_failed";
+        return false;
+    }
+
+    auto* tramp_words = reinterpret_cast<uint32_t*>(tramp);
+    memcpy(tramp_words, original_words, sizeof(original_words));
+    emit_aarch64_absolute_jump(tramp_words + 4, target + 16);
+
+    if (mprotect(tramp, 64, PROT_READ | PROT_EXEC) != 0) {
+        munmap(tramp, 64);
+        detail = "media_inline_trampoline_mprotect_failed";
+        return false;
+    }
+
+    if (mprotect(reinterpret_cast<void*>(page), page_size,
+                 PROT_READ | PROT_WRITE) != 0) {
+        munmap(tramp, 64);
+        detail = "media_inline_target_mprotect_failed";
+        return false;
+    }
+
+    emit_aarch64_absolute_jump(reinterpret_cast<uint32_t*>(target),
+                               reinterpret_cast<void*>(hooked_eglSwapBuffers));
+    __builtin___clear_cache(reinterpret_cast<char*>(target),
+                            reinterpret_cast<char*>(target + 16));
+
+    // Restore executable-only permissions on the target code page.
+    (void)mprotect(reinterpret_cast<void*>(page), page_size, PROT_READ | PROT_EXEC);
+
+    g_media_inline_target = resolved;
+    g_media_inline_trampoline = tramp;
+    g_media_inline_installed = true;
+    *original = tramp;
+    detail = std::string("media_inline_hook_ok:") + path;
+    return true;
+#else
+    (void)resolved;
+    (void)original;
+    detail = "media_inline_arm64_only";
+    return false;
+#endif
+}
+
 static bool install_media_probe_got_hook(std::string& detail, void** got_address,
                                            void** original, void** value_after_patch,
                                            const std::string& package_name) {
-    // Only inspect/patch an ELF loaded from the target app's own package path.
-    // System/vendor libraries are deliberately excluded by this path filter.
+    // First try the least invasive path: an app/private GOT relocation.
+    // This is the same mechanism used by the stable Unity path.
     GotPatchContext ctx{};
     ctx.library_name = nullptr;
     ctx.path_filter = package_name.c_str();
@@ -2240,12 +2368,31 @@ static bool install_media_probe_got_hook(std::string& detail, void** got_address
     dl_iterate_phdr(patch_got_callback, &ctx);
     if (got_address) *got_address = ctx.found_got;
     if (value_after_patch) *value_after_patch = ctx.value_after_patch;
-    if (!ctx.success) {
-        detail = ctx.error ? ctx.error : "media_probe_got_not_found";
-        return false;
+    if (ctx.success) {
+        detail = std::string("media_probe_got_ok:") + (ctx.path ? ctx.path : "(unknown)");
+        return true;
     }
-    detail = std::string("media_probe_got_ok:") + (ctx.path ? ctx.path : "(unknown)");
-    return true;
+
+    // Non-Unity media applications can call eglSwapBuffers through a system
+    // EGL export without having an app-owned PLT relocation. The dedicated
+    // media fallback hooks only the libEGL export in this process. It never
+    // patches libGLES_mali.so/vendor code and is never used for Unity.
+    void* handle = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
+    void* resolved = handle ? dlsym(handle, "eglSwapBuffers") : nullptr;
+    if (handle) dlclose(handle);
+
+    std::string inline_detail;
+    if (install_media_probe_inline_hook(inline_detail, resolved, original)) {
+        if (got_address) *got_address = nullptr;
+        if (value_after_patch) *value_after_patch = nullptr;
+        detail = inline_detail;
+        return true;
+    }
+
+    detail = std::string("media_probe_no_hook:got=") +
+             (ctx.error ? ctx.error : "unknown") +
+             ",inline=" + inline_detail;
+    return false;
 }
 
 static void write_hook_report(const char* stage, const std::string& target_name,

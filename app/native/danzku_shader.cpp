@@ -2899,7 +2899,10 @@ public:
                 write_media_worker_diag("media_identity_gate", attempt, media_gate);
             }
             if (!unity && media_engine_target) {
-                // DIAGNOSTIC PHASE ONLY: do not patch the Media GOT yet.
+                // The diagnostic phase has now proven that libandroid_runtime.so
+                // exposes an eglSwapBuffers JUMP_SLOT. Keep the read-only
+                // diagnostic for telemetry, then proceed to the existing GOT
+                // installer. No new hook mechanism is introduced here.
                 run_media_got_diagnostic(package_name);
                 char diag_detail[512] = {};
                 snprintf(diag_detail, sizeof(diag_detail),
@@ -2914,8 +2917,6 @@ public:
                          g_media_diag_target_egl_relocation_found ? 1 : 0,
                          g_media_diag_failure.empty() ? "(none)" : g_media_diag_failure.c_str());
                 write_media_worker_diag("got_diagnostic", attempt, diag_detail);
-                write_media_worker_diag("worker_exit", attempt, "diagnostic_only_no_media_hook");
-                return nullptr;
             }
 
             write_media_worker_diag("got_install_start", attempt, unity ? "game_path" : "media_path");

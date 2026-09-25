@@ -191,6 +191,26 @@ static bool ensure_dir(const std::string& path) {
 
 static zygisk::Api* g_api = nullptr;
 using EglSwapBuffersFn = EGLBoolean (*)(EGLDisplay, EGLSurface);
+// YouTube Codec2 YUV POC: ABI-compatible opaque declarations.
+// We intentionally do not include private Android framework headers.
+struct native_handle;
+namespace android { class Rect; }
+struct DanzKuAndroidYCbCr {
+    void* y;
+    void* cb;
+    void* cr;
+    size_t ystride;
+    size_t cstride;
+    size_t chroma_step;
+    uint32_t reserved[8];
+};
+using GraphicBufferLockYCbCrFn = int (*)(const native_handle*, uint32_t, const android::Rect&, DanzKuAndroidYCbCr*);
+static GraphicBufferLockYCbCrFn g_orig_lockYCbCr = nullptr;
+static volatile unsigned long long g_media_ycbcr_calls = 0;
+static volatile unsigned long long g_media_ycbcr_success = 0;
+static volatile unsigned long long g_media_ycbcr_logged = 0;
+static volatile bool g_media_ycbcr_hook_installed = false;
+
 static EglSwapBuffersFn g_orig_eglSwapBuffers = nullptr;
 static volatile unsigned long long g_hook_calls = 0;
 
@@ -314,6 +334,34 @@ static void update_fps_telemetry() {
 }
 
 static std::string hex_ptr(const void* p);
+
+static int hooked_lockYCbCr(const native_handle* handle, uint32_t usage,
+                           const android::Rect& rect, DanzKuAndroidYCbCr* ycbcr) {
+    GraphicBufferLockYCbCrFn orig = g_orig_lockYCbCr;
+    if (!orig) return -1;
+
+    const int rc = orig(handle, usage, rect, ycbcr);
+    const unsigned long long call_no =
+        __atomic_add_fetch(&g_media_ycbcr_calls, 1ULL, __ATOMIC_RELAXED);
+
+    if (rc == 0) {
+        __atomic_add_fetch(&g_media_ycbcr_success, 1ULL, __ATOMIC_RELAXED);
+        // Log only the first 16 successful mappings so playback is not flooded.
+        const unsigned long long slot =
+            __atomic_fetch_add(&g_media_ycbcr_logged, 1ULL, __ATOMIC_RELAXED);
+        if (slot < 16 && ycbcr) {
+            char line[1024] = {};
+            snprintf(line, sizeof(line),
+                     "call=%llu rc=%d usage=0x%08x y=%s cb=%s cr=%s ystride=%zu cstride=%zu chroma_step=%zu\n",
+                     call_no, rc, usage, hex_ptr(ycbcr->y).c_str(),
+                     hex_ptr(ycbcr->cb).c_str(), hex_ptr(ycbcr->cr).c_str(),
+                     ycbcr->ystride, ycbcr->cstride, ycbcr->chroma_step);
+            append_file(g_app_files_dir + "/danzku_media_ycbcr.txt", line);
+        }
+    }
+    return rc;
+}
+
 
 static std::string gl_string(GLenum name) {
     const GLubyte* value = glGetString(name);
@@ -1766,6 +1814,9 @@ static void v27_write_runtime_report() {
     out += "media_skin_protection=" + std::to_string(g_media_skin_protection_value) + "\n";
     out += "media_frame_candidates=" + std::to_string((unsigned long long)g_media_frame_candidates) + "\n";
     out += "media_frame_processed=" + std::to_string((unsigned long long)g_media_frame_processed) + "\n";
+    out += "media_ycbcr_hook_installed=" + std::to_string(g_media_ycbcr_hook_installed ? 1 : 0) + "\n";
+    out += "media_ycbcr_calls=" + std::to_string((unsigned long long)g_media_ycbcr_calls) + "\n";
+    out += "media_ycbcr_success=" + std::to_string((unsigned long long)g_media_ycbcr_success) + "\n";
 
     const std::string base = g_app_files_dir + "/danzku_v40_runtime_" + std::to_string((int)getpid());
     // Keep the existing .txt as the latest snapshot.
@@ -2748,6 +2799,25 @@ static void emit_aarch64_absolute_jump(uint32_t* dst, void* target) {
         reinterpret_cast<uint64_t>(target);
 }
 
+static bool install_media_ycbcr_hook(std::string& detail, void** got_address,
+                                      void** original, void** value_after_patch) {
+    GotPatchContext ctx{};
+    ctx.library_name = "libcodec2_vndk.so";
+    ctx.path_filter = nullptr;
+    ctx.symbol_name = "_ZN7android19GraphicBufferMapper9lockYCbCrEPK13native_handlejRKNS_4RectEP13android_ycbcr";
+    ctx.replacement = reinterpret_cast<void*>(hooked_lockYCbCr);
+    ctx.original_out = original;
+    dl_iterate_phdr(patch_got_callback, &ctx);
+    if (got_address) *got_address = ctx.found_got;
+    if (value_after_patch) *value_after_patch = ctx.value_after_patch;
+    if (ctx.success) {
+        detail = std::string("media_ycbcr_got_ok:") + (ctx.path ? ctx.path : "(unknown)");
+        return true;
+    }
+    detail = std::string("media_ycbcr_got_no_hook:") + (ctx.error ? ctx.error : "unknown");
+    return false;
+}
+
 static bool install_media_got_hook(std::string& detail, void** got_address,
                                       void** original, void** value_after_patch,
                                       const std::string& package_name) {
@@ -2898,6 +2968,41 @@ public:
                          g_media_require_codec2 ? 1 : 0);
                 write_media_worker_diag("media_identity_gate", attempt, media_gate);
             }
+            if (!unity && media_engine_target) {
+                // Direct Codec2 YUV experiment: hook the libcodec2_vndk.so GOT
+                // entry for GraphicBufferMapper::lockYCbCr. The original call
+                // always runs first; this POC only records the returned Y/Cb/Cr
+                // mapping and does not modify frame bytes.
+                std::string ycbcr_detail;
+                void* ycbcr_got = nullptr;
+                void* ycbcr_after = nullptr;
+                g_orig_lockYCbCr = nullptr;
+                const bool ycbcr_ok = install_media_ycbcr_hook(
+                    ycbcr_detail, &ycbcr_got,
+                    reinterpret_cast<void**>(&g_orig_lockYCbCr), &ycbcr_after);
+                g_media_ycbcr_hook_installed = ycbcr_ok && g_orig_lockYCbCr != nullptr;
+                char ycbcr_result[768] = {};
+                snprintf(ycbcr_result, sizeof(ycbcr_result),
+                         "ok=%d orig=%s detail=%s got=%s got_after=%s",
+                         ycbcr_ok ? 1 : 0,
+                         g_orig_lockYCbCr ? "YES" : "NO",
+                         ycbcr_detail.c_str(), hex_ptr(ycbcr_got).c_str(),
+                         hex_ptr(ycbcr_after).c_str());
+                write_media_worker_diag(ycbcr_ok ? "ycbcr_install_ok" : "ycbcr_install_fail",
+                                        attempt, ycbcr_result);
+                if (ycbcr_ok) {
+                    write_hook_report("media_ycbcr_install", g_target_name,
+                                      ycbcr_detail.c_str(), nullptr, ycbcr_got,
+                                      reinterpret_cast<void*>(g_orig_lockYCbCr), ycbcr_after);
+                    // This media POC does not depend on the unrelated EGL hook.
+                    // Wait for playback to exercise lockYCbCr, then exit.
+                    g_media_engine_active = true;
+                    write_media_worker_diag("worker_exit", attempt,
+                                            "ycbcr_hook_installed_waiting_for_playback");
+                    return nullptr;
+                }
+            }
+
             if (!unity && media_engine_target) {
                 // The diagnostic phase has now proven that libandroid_runtime.so
                 // exposes an eglSwapBuffers JUMP_SLOT. Keep the read-only

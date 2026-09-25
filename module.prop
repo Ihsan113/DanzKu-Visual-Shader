@@ -3,4 +3,4 @@ name=DanzKu Visual Shader
 version=5.2.26
 versionCode=526
 author=DanzKu
-description=Zygisk EGL visual reconstruction with APK-managed target package list and multi-game support
+description=Zygisk visual reconstruction with APK-managed targets and opt-in YouTube media EGL profile

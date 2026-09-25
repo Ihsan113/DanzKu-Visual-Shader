@@ -14,6 +14,7 @@ if [ ! -s "$TARGETS" ] || ! grep -Eq "^[[:space:]]*[A-Za-z0-9_]+(\.[A-Za-z0-9_]+
 # Managed by DanzKu Monitor APK.
 com.mobile.legends
 com.dts.freefiremax
+com.google.android.youtube
 EOF
     chmod 0644 "$TARGETS"
 fi

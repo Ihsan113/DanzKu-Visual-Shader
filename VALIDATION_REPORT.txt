@@ -8,3 +8,7 @@ monitor_config_editor_present=PASS
 monitor_native_bridge_paths=/data/local/tmp/danzku_visual_config,/data/local/tmp/danzku_visual_engine
 native_rendering_source_changed=NO
 local_android_gradle_build=NOT_AVAILABLE
+
+media_path_revision=codec2_identity_gate_plus_egl_presentation
+media_decoder_lockYCbCr_hook=NO
+media_protected_path_modified=NO

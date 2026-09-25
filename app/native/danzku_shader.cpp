@@ -415,6 +415,14 @@ static GLint g_v6_vibrance = -1;
 static GLint g_v6_anisotropic = -1;
 static GLint g_v6_adaptive_texture = -1;
 static GLint g_v6_hdr = -1;
+static GLint g_media_mode = -1;
+static GLint g_media_tone_mapping = -1;
+static GLint g_media_highlight_recovery = -1;
+static GLint g_media_shadow_lift = -1;
+static GLint g_media_local_contrast = -1;
+static GLint g_media_vibrance = -1;
+static GLint g_media_adaptive_detail = -1;
+static GLint g_media_skin_protection = -1;
 static int g_v27_width = 0;
 static int g_v27_height = 0;
 static volatile EGLint g_v27_last_surface_width = 0;
@@ -490,7 +498,30 @@ static bool g_fps_boost_value = true;
 // Media probe is opt-in and observational. It is OFF by default so existing
 // Unity/game rendering behavior remains unchanged unless explicitly enabled.
 static bool g_media_probe_value = false;
+// Media Engine is a separate, opt-in EGL-only profile for the configured media target.
+// It never hooks Codec2, BufferQueue, DRM, or protected decoder paths.
+static bool g_media_engine_value = false;
+static bool g_media_engine_active = false;
+static std::string g_media_target_package = "com.google.android.youtube";
+static bool g_media_require_codec2 = true;
+static int g_media_min_width = 720;
+static int g_media_min_height = 400;
+static float g_media_aspect_tolerance = 0.08f;
+static bool g_media_codec2_present = false;
+static bool g_media_bufferqueue_present = false;
+static bool g_media_video_surface_seen = false;
+static int g_media_last_width = 0;
+static int g_media_last_height = 0;
+static float g_media_tone_mapping_value = 0.22f;
+static float g_media_highlight_recovery_value = 0.18f;
+static float g_media_shadow_lift_value = 0.12f;
+static float g_media_local_contrast_value = 0.10f;
+static float g_media_vibrance_value = 0.12f;
+static float g_media_adaptive_detail_value = 0.08f;
+static float g_media_skin_protection_value = 0.75f;
 static volatile bool g_media_probe_active = false;
+static volatile unsigned long long g_media_frame_candidates = 0;
+static volatile unsigned long long g_media_frame_processed = 0;
 static volatile unsigned long long g_v27_process_calls = 0;
 static volatile unsigned long long g_v27_process_success = 0;
 static volatile unsigned long long g_v27_process_skip = 0;
@@ -653,6 +684,19 @@ static void parse_v27_config() {
             else if (key == "ram_optimization") g_ram_optimization_value = (atoi(val.c_str()) != 0);
             else if (key == "fps_boost") g_fps_boost_value = (atoi(val.c_str()) != 0);
             else if (key == "media_probe") g_media_probe_value = (atoi(val.c_str()) != 0);
+            else if (key == "media_engine") g_media_engine_value = (atoi(val.c_str()) != 0);
+            else if (key == "media_require_codec2") g_media_require_codec2 = (atoi(val.c_str()) != 0);
+            else if (key == "media_min_width") g_media_min_width = std::max(1, atoi(val.c_str()));
+            else if (key == "media_min_height") g_media_min_height = std::max(1, atoi(val.c_str()));
+            else if (key == "media_aspect_tolerance") g_media_aspect_tolerance = strtof(val.c_str(), nullptr);
+            else if (key == "media_target_package") g_media_target_package = trim_copy(val);
+            else if (key == "media_tone_mapping") g_media_tone_mapping_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_highlight_recovery") g_media_highlight_recovery_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_shadow_lift") g_media_shadow_lift_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_local_contrast") g_media_local_contrast_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_vibrance") g_media_vibrance_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_adaptive_detail") g_media_adaptive_detail_value = strtof(val.c_str(), nullptr);
+            else if (key == "media_skin_protection") g_media_skin_protection_value = strtof(val.c_str(), nullptr);
             if (key == "enabled" || key == "logging" || key == "sharpen" || key == "clarity" ||
                 key == "temporal" || key == "temporal_strength" || key == "motion_aware" ||
                 key == "motion_threshold" || key == "motion_softness" || key == "material_detail" ||
@@ -670,7 +714,12 @@ static void parse_v27_config() {
                 key == "lighting_enhancement" || key == "effect_enhancement" || key == "saturation" ||
                 key == "vibrance" || key == "anisotropic_enhancement" || key == "frame_buffer_optimization" ||
                 key == "adaptive_texture_enhancement" || key == "hdr_enhancement" ||
-                key == "ram_optimization" || key == "fps_boost") {
+                key == "media_probe" || key == "media_engine" || key == "media_require_codec2" ||
+                 key == "media_min_width" || key == "media_min_height" || key == "media_aspect_tolerance" ||
+                 key == "media_target_package" ||
+                key == "media_tone_mapping" || key == "media_highlight_recovery" || key == "media_shadow_lift" ||
+                key == "media_local_contrast" || key == "media_vibrance" || key == "media_adaptive_detail" ||
+                key == "media_skin_protection" || key == "ram_optimization" || key == "fps_boost") {
                 g_v27_config_parse_success = 1;
             }
         }
@@ -751,6 +800,20 @@ static void parse_v27_config() {
     if (g_v6_adaptive_texture_value > 0.50f) g_v6_adaptive_texture_value = 0.50f;
     if (g_v6_hdr_value < 0.0f) g_v6_hdr_value = 0.0f;
     if (g_v6_hdr_value > 1.0f) g_v6_hdr_value = 1.0f;
+    if (g_media_tone_mapping_value < 0.0f) g_media_tone_mapping_value = 0.0f;
+    if (g_media_tone_mapping_value > 1.0f) g_media_tone_mapping_value = 1.0f;
+    if (g_media_highlight_recovery_value < 0.0f) g_media_highlight_recovery_value = 0.0f;
+    if (g_media_highlight_recovery_value > 1.0f) g_media_highlight_recovery_value = 1.0f;
+    if (g_media_shadow_lift_value < 0.0f) g_media_shadow_lift_value = 0.0f;
+    if (g_media_shadow_lift_value > 1.0f) g_media_shadow_lift_value = 1.0f;
+    if (g_media_local_contrast_value < 0.0f) g_media_local_contrast_value = 0.0f;
+    if (g_media_local_contrast_value > 1.0f) g_media_local_contrast_value = 1.0f;
+    if (g_media_vibrance_value < 0.0f) g_media_vibrance_value = 0.0f;
+    if (g_media_vibrance_value > 1.0f) g_media_vibrance_value = 1.0f;
+    if (g_media_adaptive_detail_value < 0.0f) g_media_adaptive_detail_value = 0.0f;
+    if (g_media_adaptive_detail_value > 1.0f) g_media_adaptive_detail_value = 1.0f;
+    if (g_media_skin_protection_value < 0.0f) g_media_skin_protection_value = 0.0f;
+    if (g_media_skin_protection_value > 1.0f) g_media_skin_protection_value = 1.0f;
 }
 
 
@@ -833,6 +896,40 @@ static void cleanup_danzku_files() {
         }
     }
     closedir(dir);
+}
+
+static bool media_engine_target_matches() {
+    const std::string package_name = base_package_name(g_target_name);
+    return g_media_engine_value && !g_media_target_package.empty() &&
+           package_name == g_media_target_package;
+}
+
+static bool media_surface_candidate(EGLDisplay dpy, EGLSurface surface, EGLint* width_out, EGLint* height_out) {
+    if (width_out) *width_out = 0;
+    if (height_out) *height_out = 0;
+    if (dpy == EGL_NO_DISPLAY || surface == EGL_NO_SURFACE) return false;
+    EGLint w = 0, h = 0;
+    if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE ||
+        eglQuerySurface(dpy, surface, EGL_HEIGHT, &h) != EGL_TRUE || w <= 0 || h <= 0) return false;
+    if (width_out) *width_out = w;
+    if (height_out) *height_out = h;
+
+    // Read-only gate based on the discovered YouTube media stack. We do not
+    // hook lockYCbCr(), C2AllocationGralloc::map(), BufferQueue, or decoder memory.
+    if (g_media_require_codec2 && (!g_media_codec2_present || !g_media_bufferqueue_present)) return false;
+
+    const float aspect = static_cast<float>(w) / static_cast<float>(h);
+    const float err16 = fabsf(aspect - (16.0f / 9.0f)) / (16.0f / 9.0f);
+    const float tolerance = std::max(0.01f, std::min(0.30f, g_media_aspect_tolerance));
+    const bool candidate = w >= g_media_min_width &&
+                           h >= g_media_min_height &&
+                           err16 <= tolerance;
+    if (candidate) {
+        g_media_video_surface_seen = true;
+        g_media_last_width = w;
+        g_media_last_height = h;
+    }
+    return candidate;
 }
 
 static GLuint v27_compile_shader(GLenum type, const char* source) {
@@ -930,6 +1027,14 @@ static bool v27_init(int width, int height) {
         "uniform float uAnisotropic;"
         "uniform float uAdaptiveTexture;"
         "uniform float uHDR;"
+        "uniform float uMediaMode;"
+        "uniform float uMediaToneMapping;"
+        "uniform float uMediaHighlightRecovery;"
+        "uniform float uMediaShadowLift;"
+        "uniform float uMediaLocalContrast;"
+        "uniform float uMediaVibrance;"
+        "uniform float uMediaAdaptiveDetail;"
+        "uniform float uMediaSkinProtection;"
         "varying vec2 vUV;"
         "void main(){"
         " vec4 sampleC=texture2D(uTex,vUV);"
@@ -1046,7 +1151,24 @@ static bool v27_init(int width, int height) {
         " vec3 hdrColor=textureColor+textureColor*hdrShadowLift;"
         " hdrColor=hdrColor/(1.0+hdrHighlightCompress*max(lum,0.001));"
         " hdrColor=clamp(hdrColor,vec3(0.0),vec3(1.0));"
-        " gl_FragColor=vec4(mix(c,hdrColor,uEnabled),sampleC.a);"
+        // Media profile: lightweight HDR-like reconstruction for an EGL-presented
+        // frame. This is not HDR10+ metadata generation and is intentionally
+        // independent of Codec2/DRM paths.
+        " float mediaLum=dot(hdrColor,vec3(0.2126,0.7152,0.0722));"
+        " float mediaShadow=1.0-smoothstep(0.05,0.42,mediaLum);"
+        " float mediaHighlight=smoothstep(0.55,0.96,mediaLum);"
+        " vec3 mediaLocal=hdrColor+(hdrColor-vec3(lumA))*uMediaLocalContrast*0.45;"
+        " float mediaChroma=max(max(mediaLocal.r,mediaLocal.g),mediaLocal.b)-min(min(mediaLocal.r,mediaLocal.g),mediaLocal.b);"
+        " vec3 mediaVibrant=vec3(dot(mediaLocal,vec3(0.2126,0.7152,0.0722)))+(mediaLocal-vec3(dot(mediaLocal,vec3(0.2126,0.7152,0.0722))))*(1.0+uMediaVibrance*(1.0-smoothstep(0.02,0.75,mediaChroma)));"
+        " vec3 mediaDetail=mediaVibrant+detail*(uMediaAdaptiveDetail*smoothstep(0.005,0.10,edgeRaw));"
+        " vec3 mediaRecovered=mediaDetail+mediaDetail*mediaShadow*uMediaShadowLift;"
+        " mediaRecovered=mediaRecovered/(1.0+mediaHighlight*uMediaToneMapping*max(mediaLum,0.001));"
+        " float skinLike=smoothstep(0.18,0.48,mediaRecovered.r-mediaRecovered.g)*smoothstep(0.03,0.24,mediaRecovered.g-mediaRecovered.b);"
+        " float skinGate=1.0-skinLike*uMediaSkinProtection;"
+        " mediaRecovered=mix(mediaVibrant,mediaRecovered,skinGate);"
+        " vec3 mediaOutput=clamp(mediaRecovered+mediaRecovered*mediaHighlight*uMediaHighlightRecovery,vec3(0.0),vec3(1.0));"
+        " vec3 finalColor=mix(hdrColor,mediaOutput,clamp(uMediaMode,0.0,1.0));"
+        " gl_FragColor=vec4(mix(c,finalColor,uEnabled),sampleC.a);"
         "}";
 
     GLuint v = v27_compile_shader(GL_VERTEX_SHADER, vs);
@@ -1122,6 +1244,14 @@ static bool v27_init(int width, int height) {
     g_v6_anisotropic = glGetUniformLocation(g_v27_program, "uAnisotropic");
     g_v6_adaptive_texture = glGetUniformLocation(g_v27_program, "uAdaptiveTexture");
     g_v6_hdr = glGetUniformLocation(g_v27_program, "uHDR");
+    g_media_mode = glGetUniformLocation(g_v27_program, "uMediaMode");
+    g_media_tone_mapping = glGetUniformLocation(g_v27_program, "uMediaToneMapping");
+    g_media_highlight_recovery = glGetUniformLocation(g_v27_program, "uMediaHighlightRecovery");
+    g_media_shadow_lift = glGetUniformLocation(g_v27_program, "uMediaShadowLift");
+    g_media_local_contrast = glGetUniformLocation(g_v27_program, "uMediaLocalContrast");
+    g_media_vibrance = glGetUniformLocation(g_v27_program, "uMediaVibrance");
+    g_media_adaptive_detail = glGetUniformLocation(g_v27_program, "uMediaAdaptiveDetail");
+    g_media_skin_protection = glGetUniformLocation(g_v27_program, "uMediaSkinProtection");
 
     glGenTextures(1, &g_v27_texture);
     glBindTexture(GL_TEXTURE_2D, g_v27_texture);
@@ -1435,6 +1565,28 @@ static void v27_write_runtime_report() {
     out += "hdr_enhancement=" + std::to_string(g_v6_hdr_value) + "\n";
     out += "media_probe=" + std::to_string(g_media_probe_value ? 1 : 0) + "\n";
     out += "media_probe_active=" + std::to_string(g_media_probe_active ? 1 : 0) + "\n";
+    out += "media_engine=" + std::to_string(g_media_engine_value ? 1 : 0) + "\n";
+    out += "media_engine_active=" + std::to_string(g_media_engine_active ? 1 : 0) + "\n";
+    out += "media_engine_route=codec2_identity_gate_plus_egl_framebuffer\n";
+    out += "media_codec2_present=" + std::to_string(g_media_codec2_present ? 1 : 0) + "\n";
+    out += "media_bufferqueue_present=" + std::to_string(g_media_bufferqueue_present ? 1 : 0) + "\n";
+    out += "media_video_surface_seen=" + std::to_string(g_media_video_surface_seen ? 1 : 0) + "\n";
+    out += "media_last_width=" + std::to_string(g_media_last_width) + "\n";
+    out += "media_last_height=" + std::to_string(g_media_last_height) + "\n";
+    out += "media_require_codec2=" + std::to_string(g_media_require_codec2 ? 1 : 0) + "\n";
+    out += "media_min_width=" + std::to_string(g_media_min_width) + "\n";
+    out += "media_min_height=" + std::to_string(g_media_min_height) + "\n";
+    out += "media_aspect_tolerance=" + std::to_string(g_media_aspect_tolerance) + "\n";
+    out += "media_target_package=" + g_media_target_package + "\n";
+    out += "media_tone_mapping=" + std::to_string(g_media_tone_mapping_value) + "\n";
+    out += "media_highlight_recovery=" + std::to_string(g_media_highlight_recovery_value) + "\n";
+    out += "media_shadow_lift=" + std::to_string(g_media_shadow_lift_value) + "\n";
+    out += "media_local_contrast=" + std::to_string(g_media_local_contrast_value) + "\n";
+    out += "media_vibrance=" + std::to_string(g_media_vibrance_value) + "\n";
+    out += "media_adaptive_detail=" + std::to_string(g_media_adaptive_detail_value) + "\n";
+    out += "media_skin_protection=" + std::to_string(g_media_skin_protection_value) + "\n";
+    out += "media_frame_candidates=" + std::to_string((unsigned long long)g_media_frame_candidates) + "\n";
+    out += "media_frame_processed=" + std::to_string((unsigned long long)g_media_frame_processed) + "\n";
 
     const std::string base = g_app_files_dir + "/danzku_v40_runtime_" + std::to_string((int)getpid());
     // Keep the existing .txt as the latest snapshot.
@@ -1743,6 +1895,10 @@ static bool v27_process_frame(EGLSurface surface) {
         // texture using its own texel size and the final draw covers the real surface.
         glViewport(0, 0, surface_width, surface_height);
     }
+    const bool media_mode = g_media_engine_active && media_engine_target_matches();
+    // Keep the existing valid history texture binding for shader safety, but force
+    // temporal contribution to zero in media mode; this avoids changing the proven
+    // resource lifecycle while keeping the media profile spatial/lightweight.
     v27_ram_optimize_history();
     v27_ensure_history();
     glActiveTexture(GL_TEXTURE0);
@@ -1767,29 +1923,33 @@ static bool v27_process_frame(EGLSurface surface) {
         if (visual_proof_bypass) ++g_v26_visual_proof_bypass_frames;
         else ++g_v26_visual_proof_frames;
     }
-    const float proof_sharpen = visual_proof_bypass ? 0.0f : g_v27_sharpen_value;
-    const float proof_clarity = visual_proof_bypass ? 0.0f : g_v27_clarity_value;
-    const float proof_temporal = visual_proof_bypass ? 0.0f : (g_v28_temporal_value ? g_v28_temporal_strength : 0.0f);
-    const float proof_motion_aware = visual_proof_bypass ? 0.0f : (g_v285_motion_aware_value ? 1.0f : 0.0f);
-    const float proof_material = visual_proof_bypass ? 0.0f : g_v291_material_detail_value;
-    const float proof_local_contrast = visual_proof_bypass ? 0.0f : g_v291_local_contrast_value;
-    const float proof_highlight = visual_proof_bypass ? 0.0f : g_v291_highlight_refine_value;
-    const float proof_shadow_refine = visual_proof_bypass ? 0.0f : g_v291_shadow_refine_value;
-    const float proof_edge_aware = visual_proof_bypass ? 0.0f : (g_v295_edge_aware_value ? 1.0f : 0.0f);
-    const float proof_edge_strength = visual_proof_bypass ? 0.0f : g_v295_edge_strength_value;
-    const float proof_recovery = visual_proof_bypass ? 0.0f : (g_v32_temporal_recovery_value ? 1.0f : 0.0f);
-    const float proof_confidence = visual_proof_bypass ? 0.0f : (g_v33_confidence_value ? 1.0f : 0.0f);
-    const float proof_neural = visual_proof_bypass ? 0.0f : (g_v35_neural_style_value ? 1.0f : 0.0f);
-    const float proof_high_end = visual_proof_bypass ? 0.0f : (g_v40_high_end_value ? 1.0f : 0.0f);
-    const float proof_aa = visual_proof_bypass ? 0.0f : (g_v5_aa_value ? 1.0f : 0.0f);
-    const float proof_shadow = visual_proof_bypass ? 0.0f : g_v5_shadow_value;
-    const float proof_contact = visual_proof_bypass ? 0.0f : g_v5_contact_shadow_value;
-    const float proof_ao = visual_proof_bypass ? 0.0f : g_v5_ao_value;
-    const float proof_specular = visual_proof_bypass ? 0.0f : g_v5_specular_value;
-    const float proof_reflection = visual_proof_bypass ? 0.0f : g_v5_reflection_value;
-    const float proof_lighting = visual_proof_bypass ? 0.0f : g_v5_lighting_value;
-    const float proof_effect = visual_proof_bypass ? 0.0f : g_v5_effect_value;
-    const float proof_saturation = visual_proof_bypass ? 1.0f : g_v5_saturation_value;
+    // Media mode deliberately disables the game/reconstruction feature stack and
+    // uses only the lightweight media profile below. This keeps YouTube separate
+    // from the existing game tuning path.
+    const float profile_gate = media_mode ? 0.0f : 1.0f;
+    const float proof_sharpen = (visual_proof_bypass ? 0.0f : g_v27_sharpen_value) * profile_gate;
+    const float proof_clarity = (visual_proof_bypass ? 0.0f : g_v27_clarity_value) * profile_gate;
+    const float proof_temporal = (visual_proof_bypass ? 0.0f : (g_v28_temporal_value ? g_v28_temporal_strength : 0.0f)) * profile_gate;
+    const float proof_motion_aware = (visual_proof_bypass ? 0.0f : (g_v285_motion_aware_value ? 1.0f : 0.0f)) * profile_gate;
+    const float proof_material = (visual_proof_bypass ? 0.0f : g_v291_material_detail_value) * profile_gate;
+    const float proof_local_contrast = (visual_proof_bypass ? 0.0f : g_v291_local_contrast_value) * profile_gate;
+    const float proof_highlight = (visual_proof_bypass ? 0.0f : g_v291_highlight_refine_value) * profile_gate;
+    const float proof_shadow_refine = (visual_proof_bypass ? 0.0f : g_v291_shadow_refine_value) * profile_gate;
+    const float proof_edge_aware = (visual_proof_bypass ? 0.0f : (g_v295_edge_aware_value ? 1.0f : 0.0f)) * profile_gate;
+    const float proof_edge_strength = (visual_proof_bypass ? 0.0f : g_v295_edge_strength_value) * profile_gate;
+    const float proof_recovery = (visual_proof_bypass ? 0.0f : (g_v32_temporal_recovery_value ? 1.0f : 0.0f)) * profile_gate;
+    const float proof_confidence = (visual_proof_bypass ? 0.0f : (g_v33_confidence_value ? 1.0f : 0.0f)) * profile_gate;
+    const float proof_neural = (visual_proof_bypass ? 0.0f : (g_v35_neural_style_value ? 1.0f : 0.0f)) * profile_gate;
+    const float proof_high_end = (visual_proof_bypass ? 0.0f : (g_v40_high_end_value ? 1.0f : 0.0f)) * profile_gate;
+    const float proof_aa = (visual_proof_bypass ? 0.0f : (g_v5_aa_value ? 1.0f : 0.0f)) * profile_gate;
+    const float proof_shadow = (visual_proof_bypass ? 0.0f : g_v5_shadow_value) * profile_gate;
+    const float proof_contact = (visual_proof_bypass ? 0.0f : g_v5_contact_shadow_value) * profile_gate;
+    const float proof_ao = (visual_proof_bypass ? 0.0f : g_v5_ao_value) * profile_gate;
+    const float proof_specular = (visual_proof_bypass ? 0.0f : g_v5_specular_value) * profile_gate;
+    const float proof_reflection = (visual_proof_bypass ? 0.0f : g_v5_reflection_value) * profile_gate;
+    const float proof_lighting = (visual_proof_bypass ? 0.0f : g_v5_lighting_value) * profile_gate;
+    const float proof_effect = (visual_proof_bypass ? 0.0f : g_v5_effect_value) * profile_gate;
+    const float proof_saturation = media_mode ? 1.0f : (visual_proof_bypass ? 1.0f : g_v5_saturation_value);
     glUniform1f(g_v27_sharpen, proof_sharpen);
     glUniform1f(g_v27_clarity, proof_clarity);
     glUniform1f(g_v27_enabled, g_v27_enabled_value ? 1.0f : 0.0f);
@@ -1806,10 +1966,10 @@ static bool v27_process_frame(EGLSurface surface) {
     glUniform1f(g_v295_edge_strength, proof_edge_strength);
     glUniform1f(g_v295_edge_threshold, g_v295_edge_threshold_value);
     glUniform1f(g_v295_edge_softness, g_v295_edge_softness_value);
-    glUniform1f(g_v30_reconstruction, g_v30_reconstruction_value);
-    glUniform1f(g_v31_dynamic_quality, g_v31_dynamic_quality_value ? 1.0f : 0.0f);
-    glUniform1f(g_v31_quality_min, g_v31_quality_min_value);
-    glUniform1f(g_v31_quality_max, g_v31_quality_max_value);
+    glUniform1f(g_v30_reconstruction, media_mode ? 0.0f : g_v30_reconstruction_value);
+    glUniform1f(g_v31_dynamic_quality, media_mode ? 0.0f : (g_v31_dynamic_quality_value ? 1.0f : 0.0f));
+    glUniform1f(g_v31_quality_min, media_mode ? 1.0f : g_v31_quality_min_value);
+    glUniform1f(g_v31_quality_max, media_mode ? 1.0f : g_v31_quality_max_value);
     glUniform1f(g_v32_temporal_recovery, proof_recovery);
     glUniform1f(g_v32_recovery_strength, g_v32_recovery_strength_value);
     glUniform1f(g_v32_recovery_threshold, g_v32_recovery_threshold_value);
@@ -1833,10 +1993,18 @@ static bool v27_process_frame(EGLSurface surface) {
     glUniform1f(g_v5_lighting, proof_lighting);
     glUniform1f(g_v5_effect, proof_effect);
     glUniform1f(g_v5_saturation, proof_saturation);
-    glUniform1f(g_v6_vibrance, visual_proof_bypass ? 0.0f : g_v6_vibrance_value);
-    glUniform1f(g_v6_anisotropic, visual_proof_bypass ? 0.0f : g_v6_anisotropic_value);
-    glUniform1f(g_v6_adaptive_texture, visual_proof_bypass ? 0.0f : g_v6_adaptive_texture_value);
-    glUniform1f(g_v6_hdr, visual_proof_bypass ? 0.0f : g_v6_hdr_value);
+    glUniform1f(g_v6_vibrance, (visual_proof_bypass || media_mode) ? 0.0f : g_v6_vibrance_value);
+    glUniform1f(g_v6_anisotropic, (visual_proof_bypass || media_mode) ? 0.0f : g_v6_anisotropic_value);
+    glUniform1f(g_v6_adaptive_texture, (visual_proof_bypass || media_mode) ? 0.0f : g_v6_adaptive_texture_value);
+    glUniform1f(g_v6_hdr, visual_proof_bypass ? 0.0f : (media_mode ? 0.0f : g_v6_hdr_value));
+    glUniform1f(g_media_mode, media_mode ? 1.0f : 0.0f);
+    glUniform1f(g_media_tone_mapping, media_mode ? g_media_tone_mapping_value : 0.0f);
+    glUniform1f(g_media_highlight_recovery, media_mode ? g_media_highlight_recovery_value : 0.0f);
+    glUniform1f(g_media_shadow_lift, media_mode ? g_media_shadow_lift_value : 0.0f);
+    glUniform1f(g_media_local_contrast, media_mode ? g_media_local_contrast_value : 0.0f);
+    glUniform1f(g_media_vibrance, media_mode ? g_media_vibrance_value : 0.0f);
+    glUniform1f(g_media_adaptive_detail, media_mode ? g_media_adaptive_detail_value : 0.0f);
+    glUniform1f(g_media_skin_protection, media_mode ? g_media_skin_protection_value : 0.0f);
     glBindBuffer(GL_ARRAY_BUFFER, g_v27_vbo);
     glEnableVertexAttribArray((GLuint)g_v27_pos);
     glEnableVertexAttribArray((GLuint)g_v27_uv);
@@ -1985,6 +2153,19 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     if (config_changed) v27_write_runtime_report();
     if (g_v27_enabled_value && !g_media_probe_active) update_fps_telemetry();
     ++g_hook_calls;
+    if (g_media_engine_active && media_engine_target_matches()) {
+        EGLint w = 0, h = 0;
+        const bool candidate = media_surface_candidate(dpy, surface, &w, &h);
+        if (candidate) {
+            ++g_media_frame_candidates;
+            if (g_v27_enabled_value && !g_v27_initialized) v27_init((int)w, (int)h);
+            if (g_v27_initialized && g_v27_enabled_value && v27_process_frame(surface)) {
+                ++g_media_frame_processed;
+            }
+        }
+        if (g_orig_eglSwapBuffers) return g_orig_eglSwapBuffers(dpy, surface);
+        return EGL_FALSE;
+    }
     if (g_media_probe_active) {
         // Media mode is deliberately probe-only in this revision. It never calls
         // the visual shader/reconstruction pipeline and never changes framebuffer
@@ -2057,6 +2238,9 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
             v27 += "saturation=" + std::to_string(g_v5_saturation_value) + "\n";
             v27 += "width=" + std::to_string((int)w) + "\n";
             v27 += "height=" + std::to_string((int)h) + "\n";
+            v27 += "media_engine=" + std::to_string(g_media_engine_value ? 1 : 0) + "\n";
+            v27 += "media_engine_active=" + std::to_string(g_media_engine_active ? 1 : 0) + "\n";
+            v27 += "media_engine_route=egl_framebuffer_only\n";
             if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v40_init_" + std::to_string((int)getpid()) + ".txt", v27);
         } else {
             if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v40_init_fail_" + std::to_string((int)getpid()) + ".txt",
@@ -2472,7 +2656,7 @@ public:
             usleep(500000);
             bool unity = maps_has("libunity.so");
             bool egl = maps_has("libEGL.so");
-            if (!unity && !g_media_probe_value) continue;
+            if (!unity && !(g_media_probe_value || g_media_engine_value)) continue;
 
             void* handle = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
             void* resolved = handle ? dlsym(handle, "eglSwapBuffers") : nullptr;
@@ -2487,12 +2671,21 @@ public:
             g_orig_eglSwapBuffers = nullptr;
             void* got_after = nullptr;
             g_media_probe_active = false;
+            g_media_engine_active = false;
             const std::string package_name = base_package_name(g_target_name);
+            const bool media_engine_target = g_media_engine_value && !g_media_target_package.empty() && package_name == g_media_target_package;
+            if (media_engine_target) {
+                g_media_codec2_present = maps_has("libcodec2_vndk.so");
+                g_media_bufferqueue_present =
+                    maps_has("android.hardware.graphics.bufferqueue@2.0.so") ||
+                    maps_has("android.hardware.graphics.bufferqueue@1.0.so");
+            }
             bool ok = unity
                 ? install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after)
                 : install_media_probe_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after, package_name);
             g_hook_installed = ok && g_orig_eglSwapBuffers != nullptr;
-            g_media_probe_active = ok && !unity && g_media_probe_value;
+            g_media_engine_active = ok && !unity && media_engine_target;
+            g_media_probe_active = ok && !unity && g_media_probe_value && !g_media_engine_active;
             if (ok) {
                 write_hook_report(unity ? "install" : "media_probe_install",
                                   g_target_name, detail.c_str(), resolved, got,

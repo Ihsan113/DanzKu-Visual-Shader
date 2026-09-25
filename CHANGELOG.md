@@ -93,3 +93,14 @@ Previous V5.2.20 behavior remains the fallback when the output-stage guard is no
 - Adds a media-only, process-local ARM64 fallback for `libEGL.so` when a non-Unity app has no app-owned `eglSwapBuffers` PLT/GOT relocation.
 - The fallback is probe-only: it records the EGL/GL state and immediately calls the original `eglSwapBuffers`; it never runs the V5.2.26 visual shader pipeline.
 - It never patches `libGLES_mali.so` or vendor GLES code.
+
+## V5.2.26 Media Engine YouTube profile
+- Added an opt-in media profile targeted by package name, default `com.google.android.youtube`.
+- Added lightweight tone mapping, highlight recovery, shadow lift, local contrast, vibrance, adaptive detail, and skin-tone protection controls.
+- Media profile disables the existing game/reconstruction feature stack while active, keeping game tuning isolated from media tuning.
+- Added a conservative 16:9 EGL-surface candidate gate to avoid processing ordinary portrait/full-screen UI surfaces.
+- Added media runtime telemetry: route, target package, candidate frames, and processed frames.
+- Added YouTube to the default target package list.
+- Media Engine remains OFF by default.
+- Safety boundary: the Media Engine does not hook Codec2, GraphicBufferMapper, BufferQueue, DRM, or protected decoder paths. It only operates on an EGL framebuffer when an eligible surface is observed.
+- This is HDR10+-like visual processing only; it does not generate or modify HDR10+ metadata.

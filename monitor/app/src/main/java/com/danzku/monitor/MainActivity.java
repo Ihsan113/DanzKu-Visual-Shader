@@ -60,7 +60,9 @@ public class MainActivity extends Activity {
     SeekBar saturationSeekBar;
     TextView saturationValueLabel;
     SeekBar vibranceSeekBar, anisotropicSeekBar, adaptiveTextureSeekBar, hdrSeekBar;
+    SeekBar mediaToneMappingSeekBar, mediaHighlightSeekBar, mediaShadowSeekBar, mediaLocalSeekBar, mediaVibranceSeekBar, mediaDetailSeekBar, mediaSkinSeekBar;
     TextView vibranceValueLabel, anisotropicValueLabel, adaptiveTextureValueLabel, hdrValueLabel;
+    TextView mediaToneMappingValueLabel, mediaHighlightValueLabel, mediaShadowValueLabel, mediaLocalValueLabel, mediaVibranceValueLabel, mediaDetailValueLabel, mediaSkinValueLabel;
 
 
     RenderStats parseRenderStats(String report) {
@@ -165,6 +167,15 @@ public class MainActivity extends Activity {
         defaultStrengths.put("ram_optimization", "1");
         defaultStrengths.put("fps_boost", "1");
         defaultStrengths.put("media_probe", "0");
+        defaultStrengths.put("media_engine", "0");
+        defaultStrengths.put("media_target_package", "com.google.android.youtube");
+        defaultStrengths.put("media_tone_mapping", "0.22");
+        defaultStrengths.put("media_highlight_recovery", "0.18");
+        defaultStrengths.put("media_shadow_lift", "0.12");
+        defaultStrengths.put("media_local_contrast", "0.10");
+        defaultStrengths.put("media_vibrance", "0.12");
+        defaultStrengths.put("media_adaptive_detail", "0.08");
+        defaultStrengths.put("media_skin_protection", "0.75");
     }
 
     int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
@@ -194,6 +205,14 @@ public class MainActivity extends Activity {
         addToggle("RAM Optimization", "ram_optimization");
         addToggle("FPS Boost", "fps_boost");
         addToggle("Media Probe (YouTube)", "media_probe");
+        addToggle("Media Engine (YouTube • EGL only)", "media_engine");
+        addFloatControl("Media Tone Mapping", "media_tone_mapping", 0.0f, 1.0f, 0.22f, "mediaToneMappingSeekBar", "mediaToneMappingValueLabel", "0.00");
+        addFloatControl("Media Highlight Recovery", "media_highlight_recovery", 0.0f, 1.0f, 0.18f, "mediaHighlightSeekBar", "mediaHighlightValueLabel", "0.00");
+        addFloatControl("Media Shadow Lift", "media_shadow_lift", 0.0f, 1.0f, 0.12f, "mediaShadowSeekBar", "mediaShadowValueLabel", "0.00");
+        addFloatControl("Media Local Contrast", "media_local_contrast", 0.0f, 1.0f, 0.10f, "mediaLocalSeekBar", "mediaLocalValueLabel", "0.00");
+        addFloatControl("Media Vibrance", "media_vibrance", 0.0f, 1.0f, 0.12f, "mediaVibranceSeekBar", "mediaVibranceValueLabel", "0.00");
+        addFloatControl("Media Adaptive Detail", "media_adaptive_detail", 0.0f, 1.0f, 0.08f, "mediaDetailSeekBar", "mediaDetailValueLabel", "0.00");
+        addFloatControl("Media Skin Protection", "media_skin_protection", 0.0f, 1.0f, 0.75f, "mediaSkinSeekBar", "mediaSkinValueLabel", "0.00");
         addToggle("Frame Buffer Optimization", "frame_buffer_optimization");
         addToggle("Advanced AA", "advanced_aa");
         addToggle("Shadow Enhancement", "shadow_enhancement");
@@ -519,6 +538,13 @@ public class MainActivity extends Activity {
         else if ("anisotropicSeekBar".equals(barField)) { anisotropicSeekBar=bar; anisotropicValueLabel=valueLabel; }
         else if ("adaptiveTextureSeekBar".equals(barField)) { adaptiveTextureSeekBar=bar; adaptiveTextureValueLabel=valueLabel; }
         else if ("hdrSeekBar".equals(barField)) { hdrSeekBar=bar; hdrValueLabel=valueLabel; }
+        else if ("mediaToneMappingSeekBar".equals(barField)) { mediaToneMappingSeekBar=bar; mediaToneMappingValueLabel=valueLabel; }
+        else if ("mediaHighlightSeekBar".equals(barField)) { mediaHighlightSeekBar=bar; mediaHighlightValueLabel=valueLabel; }
+        else if ("mediaShadowSeekBar".equals(barField)) { mediaShadowSeekBar=bar; mediaShadowValueLabel=valueLabel; }
+        else if ("mediaLocalSeekBar".equals(barField)) { mediaLocalSeekBar=bar; mediaLocalValueLabel=valueLabel; }
+        else if ("mediaVibranceSeekBar".equals(barField)) { mediaVibranceSeekBar=bar; mediaVibranceValueLabel=valueLabel; }
+        else if ("mediaDetailSeekBar".equals(barField)) { mediaDetailSeekBar=bar; mediaDetailValueLabel=valueLabel; }
+        else if ("mediaSkinSeekBar".equals(barField)) { mediaSkinSeekBar=bar; mediaSkinValueLabel=valueLabel; }
     }
 
     void syncFloatControl(String config, String key, SeekBar bar, TextView label, float min, float max, float def, String format) {
@@ -1065,6 +1091,13 @@ public class MainActivity extends Activity {
         syncFloatControl(config, "anisotropic_enhancement", anisotropicSeekBar, anisotropicValueLabel, 0.0f, 16.0f, 0.0f, "%.1f");
         syncFloatControl(config, "adaptive_texture_enhancement", adaptiveTextureSeekBar, adaptiveTextureValueLabel, 0.0f, 0.50f, 0.15f, "%.2f");
         syncFloatControl(config, "hdr_enhancement", hdrSeekBar, hdrValueLabel, 0.0f, 1.0f, 0.10f, "%.2f");
+        syncFloatControl(config, "media_tone_mapping", mediaToneMappingSeekBar, mediaToneMappingValueLabel, 0.0f, 1.0f, 0.22f, "%.2f");
+        syncFloatControl(config, "media_highlight_recovery", mediaHighlightSeekBar, mediaHighlightValueLabel, 0.0f, 1.0f, 0.18f, "%.2f");
+        syncFloatControl(config, "media_shadow_lift", mediaShadowSeekBar, mediaShadowValueLabel, 0.0f, 1.0f, 0.12f, "%.2f");
+        syncFloatControl(config, "media_local_contrast", mediaLocalSeekBar, mediaLocalValueLabel, 0.0f, 1.0f, 0.10f, "%.2f");
+        syncFloatControl(config, "media_vibrance", mediaVibranceSeekBar, mediaVibranceValueLabel, 0.0f, 1.0f, 0.12f, "%.2f");
+        syncFloatControl(config, "media_adaptive_detail", mediaDetailSeekBar, mediaDetailValueLabel, 0.0f, 1.0f, 0.08f, "%.2f");
+        syncFloatControl(config, "media_skin_protection", mediaSkinSeekBar, mediaSkinValueLabel, 0.0f, 1.0f, 0.75f, "%.2f");
     }
 
     void updateOverlayPermissionUi() {

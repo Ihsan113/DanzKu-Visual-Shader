@@ -512,6 +512,27 @@ static float g_media_skin_protection_value = 0.75f;
 static volatile unsigned long long g_media_frame_candidates = 0;
 static volatile unsigned long long g_media_frame_processed = 0;
 
+// Media-config diagnostics: read-only telemetry to distinguish stat/open/read/parse failures.
+static volatile int g_media_config_stat_ok = 0;
+static volatile int g_media_config_open_ok = 0;
+static volatile int g_media_config_read_ok = 0;
+static volatile int g_media_config_last_errno = 0;
+static volatile long long g_media_config_bytes_read = 0;
+static volatile int g_media_config_parse_seen = 0;
+static std::string g_media_config_path_used;
+
+// Media GOT diagnostic-only telemetry. This scanner never changes memory or installs a hook.
+static volatile unsigned long long g_media_diag_libs_seen = 0;
+static volatile unsigned long long g_media_diag_path_filter_skipped = 0;
+static volatile int g_media_diag_target_library_seen = 0;
+static volatile int g_media_diag_target_dynamic_seen = 0;
+static volatile int g_media_diag_target_rela_seen = 0;
+static volatile int g_media_diag_target_egl_symbol_seen = 0;
+static volatile int g_media_diag_target_egl_relocation_found = 0;
+static std::string g_media_diag_target_path;
+static std::string g_media_diag_failure;
+
+
 static void write_media_worker_diag(const char* stage, int attempt = 0, const char* detail = nullptr) {
     if (!g_v27_logging_value || g_app_files_dir.empty()) return;
     char path[512] = {};
@@ -525,9 +546,26 @@ static void write_media_worker_diag(const char* stage, int attempt = 0, const ch
     out += "attempt=" + std::to_string(attempt) + "\n";
     out += "target=" + g_target_name + "\n";
     out += "media_engine=" + std::to_string(g_media_engine_value ? 1 : 0) + "\n";
+    out += "media_config_stat_ok=" + std::to_string(g_media_config_stat_ok ? 1 : 0) + "\n";
+    out += "media_config_open_ok=" + std::to_string(g_media_config_open_ok ? 1 : 0) + "\n";
+    out += "media_config_read_ok=" + std::to_string(g_media_config_read_ok ? 1 : 0) + "\n";
+    out += "media_config_parse_seen=" + std::to_string(g_media_config_parse_seen ? 1 : 0) + "\n";
+    out += "media_config_errno=" + std::to_string(g_media_config_last_errno) + "\n";
+    out += "media_config_bytes=" + std::to_string((long long)g_media_config_bytes_read) + "\n";
+    out += "media_config_path=" + (g_media_config_path_used.empty() ? std::string("(none)") : g_media_config_path_used) + "\n";
+    out += "media_diag_libs_seen=" + std::to_string((unsigned long long)g_media_diag_libs_seen) + "\n";
+    out += "media_diag_path_filter_skipped=" + std::to_string((unsigned long long)g_media_diag_path_filter_skipped) + "\n";
+    out += "media_diag_target_library_seen=" + std::to_string(g_media_diag_target_library_seen ? 1 : 0) + "\n";
+    out += "media_diag_target_dynamic_seen=" + std::to_string(g_media_diag_target_dynamic_seen ? 1 : 0) + "\n";
+    out += "media_diag_target_rela_seen=" + std::to_string(g_media_diag_target_rela_seen ? 1 : 0) + "\n";
+    out += "media_diag_target_egl_symbol_seen=" + std::to_string(g_media_diag_target_egl_symbol_seen ? 1 : 0) + "\n";
+    out += "media_diag_target_egl_relocation_found=" + std::to_string(g_media_diag_target_egl_relocation_found ? 1 : 0) + "\n";
+    out += "media_diag_target_path=" + (g_media_diag_target_path.empty() ? std::string("(none)") : g_media_diag_target_path) + "\n";
+    out += "media_diag_failure=" + (g_media_diag_failure.empty() ? std::string("(none)") : g_media_diag_failure) + "\n";
     out += "media_target_package=" + g_media_target_package + "\n";
     out += "media_target_match=" +
-           std::to_string((g_media_engine_value && !g_media_target_package.empty() &&\n                            base_package_name(g_target_name) == g_media_target_package) ? 1 : 0) + "\n";
+           std::to_string((g_media_engine_value && !g_media_target_package.empty() &&
+                            base_package_name(g_target_name) == g_media_target_package) ? 1 : 0) + "\n";
     out += "codec2_present=" + std::to_string(g_media_codec2_present ? 1 : 0) + "\n";
     out += "bufferqueue_present=" + std::to_string(g_media_bufferqueue_present ? 1 : 0) + "\n";
     out += "hook_installed=" + std::to_string(g_hook_installed ? 1 : 0) + "\n";
@@ -628,30 +666,93 @@ static uint64_t g_media_config_mtime_ns = 0;
 static off_t g_media_config_size = 0;
 
 static std::string media_config_file_path() {
+    // Match the proven Game/visual config access pattern: try open() directly
+    // instead of relying on stat() first. This keeps SELinux/namespace behavior
+    // identical to the working config reader.
+    // The last path is the namespace-safe fallback used by the manual Termux
+    // test. The APK mirrors media.conf there automatically, so no manual cp is
+    // required after this fix.
     const char* paths[] = {
         "/data/adb/modules/danzku_visual_shader/config/media.conf",
         "/proc/self/root/data/adb/modules/danzku_visual_shader/config/media.conf",
         "/data/local/tmp/danzku_media_config"
     };
+
+    g_media_config_stat_ok = 0;
+    g_media_config_open_ok = 0;
+    g_media_config_read_ok = 0;
+    g_media_config_last_errno = 0;
+    g_media_config_bytes_read = 0;
+    g_media_config_path_used.clear();
+
     for (const char* path : paths) {
-        struct stat st{};
-        if (stat(path, &st) == 0) return std::string(path);
+        errno = 0;
+        int fd = open(path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) {
+            g_media_config_last_errno = errno;
+            continue;
+        }
+
+        g_media_config_stat_ok = 1;
+        g_media_config_open_ok = 1;
+        g_media_config_path_used = path;
+        close(fd);
+        return std::string(path);
     }
     return "";
 }
 
 static std::string read_media_config() {
-    const std::string path = media_config_file_path();
-    if (path.empty()) return "";
-    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return "";
-    char buf[4096] = {};
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-    return n > 0 ? std::string(buf, static_cast<size_t>(n)) : "";
+    // The last path is the namespace-safe fallback used by the manual Termux
+    // test. The APK mirrors media.conf there automatically, so no manual cp is
+    // required after this fix.
+    const char* paths[] = {
+        "/data/adb/modules/danzku_visual_shader/config/media.conf",
+        "/proc/self/root/data/adb/modules/danzku_visual_shader/config/media.conf",
+        "/data/local/tmp/danzku_media_config"
+    };
+
+    // Reset telemetry for this read attempt.
+    g_media_config_stat_ok = 0;
+    g_media_config_open_ok = 0;
+    g_media_config_read_ok = 0;
+    g_media_config_last_errno = 0;
+    g_media_config_bytes_read = 0;
+    g_media_config_path_used.clear();
+
+    for (const char* path : paths) {
+        errno = 0;
+        int fd = open(path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) {
+            g_media_config_last_errno = errno;
+            continue;
+        }
+
+        g_media_config_stat_ok = 1;
+        g_media_config_open_ok = 1;
+
+        char buf[4096] = {};
+        errno = 0;
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        const int read_errno = errno;
+        close(fd);
+
+        if (n > 0) {
+            g_media_config_read_ok = 1;
+            g_media_config_last_errno = 0;
+            g_media_config_bytes_read = static_cast<long long>(n);
+            g_media_config_path_used = path;
+            return std::string(buf, static_cast<size_t>(n));
+        }
+
+        if (n < 0) g_media_config_last_errno = read_errno;
+    }
+
+    return "";
 }
 
 static void parse_media_config() {
+    g_media_config_parse_seen = 0;
     const std::string cfg = read_media_config();
     if (cfg.empty()) return;
     size_t start = 0;
@@ -664,7 +765,7 @@ static void parse_media_config() {
         if (eq != std::string::npos) {
             std::string key = line.substr(0, eq);
             std::string val = line.substr(eq + 1);
-            if (key == "media_engine") g_media_engine_value = atoi(val.c_str()) != 0;
+            if (key == "media_engine") { g_media_engine_value = atoi(val.c_str()) != 0; g_media_config_parse_seen = 1; }
             else if (key == "media_require_codec2") g_media_require_codec2 = atoi(val.c_str()) != 0;
             else if (key == "media_min_width") g_media_min_width = std::max(1, atoi(val.c_str()));
             else if (key == "media_min_height") g_media_min_height = std::max(1, atoi(val.c_str()));
@@ -697,6 +798,11 @@ static void parse_v27_config() {
     g_v27_config_parse_success = 0;
     ++g_v27_config_sync_count;
     g_v27_config_path_used.clear();
+
+    // Media configuration is independent from visual.conf. Parse it first so
+    // Media Engine can initialize even when the visual config is unavailable
+    // from the app/zygote SELinux context.
+    parse_media_config();
 
     std::string cfg = read_small_config();
     g_v27_config_read_success = !cfg.empty();
@@ -878,7 +984,6 @@ key == "ram_optimization" || key == "fps_boost") {
     if (g_media_adaptive_detail_value > 1.0f) g_media_adaptive_detail_value = 1.0f;
     if (g_media_skin_protection_value < 0.0f) g_media_skin_protection_value = 0.0f;
     if (g_media_skin_protection_value > 1.0f) g_media_skin_protection_value = 1.0f;
-    parse_media_config();
 }
 
 
@@ -2462,6 +2567,136 @@ static int patch_got_callback(struct dl_phdr_info* info, size_t, void* opaque) {
     return 1;
 }
 
+// Read-only diagnostic pass for the media GOT route.
+// IMPORTANT: this function never calls mprotect(), never writes a GOT slot,
+// and never installs a hook. It only observes what dl_iterate_phdr() exposes.
+struct MediaGotDiagContext {
+    const char* path_filter;
+    const char* symbol_name;
+};
+
+static int media_got_diag_callback(struct dl_phdr_info* info, size_t, void* opaque) {
+    auto* ctx = static_cast<MediaGotDiagContext*>(opaque);
+    const char* path = info->dlpi_name;
+    if (!path || !*path) return 0;
+
+    ++g_media_diag_libs_seen;
+
+    const char* slash = strrchr(path, '/');
+    const char* base_name = slash ? slash + 1 : path;
+    const bool is_target_library = (strcmp(base_name, "libandroid_runtime.so") == 0);
+
+    // Record the target library before applying the package path filter so the
+    // diagnostic can distinguish "not visible" from "filtered out".
+    if (is_target_library) {
+        g_media_diag_target_library_seen = 1;
+        g_media_diag_target_path = path;
+    }
+
+    if (ctx->path_filter && !strstr(path, ctx->path_filter)) {
+        ++g_media_diag_path_filter_skipped;
+        if (is_target_library) {
+            g_media_diag_failure = "libandroid_runtime_filtered_by_package_path";
+        }
+        return 0;
+    }
+
+    if (!is_target_library) return 0;
+
+    const ElfW(Phdr)* dynamic_phdr = nullptr;
+    for (size_t i = 0; i < info->dlpi_phnum; ++i) {
+        if (info->dlpi_phdr[i].p_type == PT_DYNAMIC) {
+            dynamic_phdr = &info->dlpi_phdr[i];
+            break;
+        }
+    }
+    if (!dynamic_phdr) {
+        g_media_diag_failure = "libandroid_runtime_dynamic_missing";
+        return 0;
+    }
+    g_media_diag_target_dynamic_seen = 1;
+
+    auto* dyn = reinterpret_cast<const ElfW(Dyn)*>(
+        info->dlpi_addr + dynamic_phdr->p_vaddr);
+
+    const ElfW(Rela)* rela = nullptr;
+    size_t rela_size = 0;
+    const ElfW(Sym)* symtab = nullptr;
+    const char* strtab = nullptr;
+    long plt_rel_type = 0;
+
+    for (const ElfW(Dyn)* d = dyn; d->d_tag != DT_NULL; ++d) {
+        switch (d->d_tag) {
+            case DT_JMPREL:
+                rela = reinterpret_cast<const ElfW(Rela)*>(
+                    info->dlpi_addr + d->d_un.d_ptr);
+                break;
+            case DT_PLTRELSZ:
+                rela_size = static_cast<size_t>(d->d_un.d_val);
+                break;
+            case DT_PLTREL:
+                plt_rel_type = d->d_un.d_val;
+                break;
+            case DT_SYMTAB:
+                symtab = reinterpret_cast<const ElfW(Sym)*>(
+                    info->dlpi_addr + d->d_un.d_ptr);
+                break;
+            case DT_STRTAB:
+                strtab = reinterpret_cast<const char*>(
+                    info->dlpi_addr + d->d_un.d_ptr);
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (rela && rela_size && symtab && strtab && plt_rel_type == DT_RELA) {
+        g_media_diag_target_rela_seen = 1;
+    } else {
+        g_media_diag_failure = "libandroid_runtime_rela_tables_missing";
+        return 0;
+    }
+
+    const size_t count = rela_size / sizeof(ElfW(Rela));
+    for (size_t i = 0; i < count; ++i) {
+        const ElfW(Rela)& r = rela[i];
+        if (ELF64_R_TYPE(r.r_info) != R_AARCH64_JUMP_SLOT) continue;
+
+        const size_t sym_index = ELF64_R_SYM(r.r_info);
+        const char* name = strtab + symtab[sym_index].st_name;
+        if (!name || strcmp(name, ctx->symbol_name) != 0) continue;
+
+        g_media_diag_target_egl_symbol_seen = 1;
+        g_media_diag_target_egl_relocation_found = 1;
+        g_media_diag_failure = "eglSwapBuffers_jump_slot_found";
+        return 0;
+    }
+
+    g_media_diag_failure = "eglSwapBuffers_jump_slot_not_found";
+    return 0;
+}
+
+static void run_media_got_diagnostic(const std::string& package_name) {
+    g_media_diag_libs_seen = 0;
+    g_media_diag_path_filter_skipped = 0;
+    g_media_diag_target_library_seen = 0;
+    g_media_diag_target_dynamic_seen = 0;
+    g_media_diag_target_rela_seen = 0;
+    g_media_diag_target_egl_symbol_seen = 0;
+    g_media_diag_target_egl_relocation_found = 0;
+    g_media_diag_target_path.clear();
+    g_media_diag_failure.clear();
+
+    MediaGotDiagContext ctx{};
+    ctx.path_filter = package_name.c_str();
+    ctx.symbol_name = "eglSwapBuffers";
+    dl_iterate_phdr(media_got_diag_callback, &ctx);
+
+    if (g_media_diag_failure.empty()) {
+        g_media_diag_failure = "no_target_library_observed";
+    }
+}
+
 static bool install_manual_got_hook(std::string& detail, void** got_address, void** original, void** value_after_patch) {
     GotPatchContext ctx{};
     ctx.library_name = "libunity.so";
@@ -2656,6 +2891,26 @@ public:
                          g_media_require_codec2 ? 1 : 0);
                 write_media_worker_diag("media_identity_gate", attempt, media_gate);
             }
+            if (!unity && media_engine_target) {
+                // DIAGNOSTIC PHASE ONLY: do not patch the Media GOT yet.
+                run_media_got_diagnostic(package_name);
+                char diag_detail[512] = {};
+                snprintf(diag_detail, sizeof(diag_detail),
+                         "libs=%llu filter_skipped=%llu target_seen=%d target_path=%s dynamic=%d rela=%d egl_symbol=%d egl_relocation=%d reason=%s",
+                         (unsigned long long)g_media_diag_libs_seen,
+                         (unsigned long long)g_media_diag_path_filter_skipped,
+                         g_media_diag_target_library_seen ? 1 : 0,
+                         g_media_diag_target_path.empty() ? "(none)" : g_media_diag_target_path.c_str(),
+                         g_media_diag_target_dynamic_seen ? 1 : 0,
+                         g_media_diag_target_rela_seen ? 1 : 0,
+                         g_media_diag_target_egl_symbol_seen ? 1 : 0,
+                         g_media_diag_target_egl_relocation_found ? 1 : 0,
+                         g_media_diag_failure.empty() ? "(none)" : g_media_diag_failure.c_str());
+                write_media_worker_diag("got_diagnostic", attempt, diag_detail);
+                write_media_worker_diag("worker_exit", attempt, "diagnostic_only_no_media_hook");
+                return nullptr;
+            }
+
             write_media_worker_diag("got_install_start", attempt, unity ? "game_path" : "media_path");
             bool ok = unity
                 ? install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after)

@@ -1,0 +1,24 @@
+DanzKu V5.2.26 Media dl_iterate_phdr Diagnostic Phase
+
+Purpose:
+- Diagnose why the current Media GOT installer reports hook_installed=0.
+- This build performs a READ-ONLY dl_iterate_phdr() scan for libandroid_runtime.so
+  and eglSwapBuffers R_AARCH64_JUMP_SLOT.
+- It records whether the package path filter skips libandroid_runtime.so.
+- The Media hook is intentionally NOT installed in this diagnostic phase.
+
+Recorded fields in danzku_media_diag_<PID>.txt:
+- media_diag_libs_seen
+- media_diag_path_filter_skipped
+- media_diag_target_library_seen
+- media_diag_target_dynamic_seen
+- media_diag_target_rela_seen
+- media_diag_target_egl_symbol_seen
+- media_diag_target_egl_relocation_found
+- media_diag_target_path
+- media_diag_failure
+
+Game/Unity hook logic is unchanged.
+Media Probe remains removed/unused.
+Codec2/BufferQueue remain read-only identity gates.
+No GOT memory is modified by the diagnostic scan.

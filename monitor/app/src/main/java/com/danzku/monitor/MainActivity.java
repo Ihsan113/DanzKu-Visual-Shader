@@ -43,6 +43,9 @@ public class MainActivity extends Activity {
     Handler handler = new Handler();
     final String CONF = "/data/adb/modules/danzku_visual_shader/config/visual.conf";
     final String MEDIA_CONF = "/data/adb/modules/danzku_visual_shader/config/media.conf";
+    // Native Media Engine falls back to this path when the app's namespace
+    // cannot read /data/adb directly. Every APK media edit mirrors the file here. 
+    final String MEDIA_CONFIG_FALLBACK = "/data/local/tmp/danzku_media_config";
     final String CONTROL = "/data/local/tmp/danzku_visual_engine";
     final String CONFIG_BRIDGE = "/data/local/tmp/danzku_visual_config";
     final String TARGETS = "/data/adb/modules/danzku_visual_shader/config/targets.conf";
@@ -117,6 +120,7 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("danzku_monitor", MODE_PRIVATE);
         initDefaultStrengths();
         syncNativeControlFromConfig();
+        syncMediaConfigFallback();
         buildUi();
         refresh();
         handler.postDelayed(new Runnable() {
@@ -771,6 +775,7 @@ public class MainActivity extends Activity {
                 String cmd = "echo '" + encoded + "' | toybox base64 -d > \"" + MEDIA_CONF + ".tmp\" && " +
                         "chmod 0644 \"" + MEDIA_CONF + ".tmp\" && mv \"" + MEDIA_CONF + ".tmp\" \"" + MEDIA_CONF + "\"";
                 String result = su(cmd);
+                syncMediaConfigFallback();
                 runOnUiThread(() -> {
                     if (showToast) {
                         Toast.makeText(this, result.startsWith("ERROR:")
@@ -923,6 +928,16 @@ public class MainActivity extends Activity {
                 "sed 's/^" + safeKey + "=.*/" + safeKey + "=" + safeValue + "/' \"$F\" > \"$T\"; " +
                 "else cat \"$F\" > \"$T\" 2>/dev/null; printf '%s\\n' '" + safeKey + "=" + safeValue + "' >> \"$T\"; fi; " +
                 "chmod 0644 \"$T\" && mv \"$T\" \"$F\"";
+        su(cmd);
+        if (isMediaKey(key)) syncMediaConfigFallback();
+    }
+
+    void syncMediaConfigFallback() {
+        String cmd = "if [ -r \"" + MEDIA_CONF + "\" ]; then " +
+                "cp \"" + MEDIA_CONF + "\" \"" + MEDIA_CONFIG_FALLBACK + ".tmp\" 2>/dev/null && " +
+                "chmod 0644 \"" + MEDIA_CONFIG_FALLBACK + ".tmp\" && " +
+                "mv \"" + MEDIA_CONFIG_FALLBACK + ".tmp\" \"" + MEDIA_CONFIG_FALLBACK + "\"; " +
+                "fi";
         su(cmd);
     }
 

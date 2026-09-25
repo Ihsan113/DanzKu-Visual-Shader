@@ -164,6 +164,7 @@ public class MainActivity extends Activity {
         defaultStrengths.put("logging", "1");
         defaultStrengths.put("ram_optimization", "1");
         defaultStrengths.put("fps_boost", "1");
+        defaultStrengths.put("media_probe", "0");
     }
 
     int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
@@ -192,6 +193,7 @@ public class MainActivity extends Activity {
         root.addView(targets);
         addToggle("RAM Optimization", "ram_optimization");
         addToggle("FPS Boost", "fps_boost");
+        addToggle("Media Probe (YouTube)", "media_probe");
         addToggle("Frame Buffer Optimization", "frame_buffer_optimization");
         addToggle("Advanced AA", "advanced_aa");
         addToggle("Shadow Enhancement", "shadow_enhancement");

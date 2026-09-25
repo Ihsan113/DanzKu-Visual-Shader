@@ -476,6 +476,10 @@ static float g_v6_adaptive_texture_value = 0.0f;
 static float g_v6_hdr_value = 0.0f;
 static bool g_ram_optimization_value = true;
 static bool g_fps_boost_value = true;
+// Media probe is opt-in and observational. It is OFF by default so existing
+// Unity/game rendering behavior remains unchanged unless explicitly enabled.
+static bool g_media_probe_value = false;
+static volatile bool g_media_probe_active = false;
 static volatile unsigned long long g_v27_process_calls = 0;
 static volatile unsigned long long g_v27_process_success = 0;
 static volatile unsigned long long g_v27_process_skip = 0;
@@ -637,6 +641,7 @@ static void parse_v27_config() {
             else if (key == "hdr_enhancement") g_v6_hdr_value = strtof(val.c_str(), nullptr);
             else if (key == "ram_optimization") g_ram_optimization_value = (atoi(val.c_str()) != 0);
             else if (key == "fps_boost") g_fps_boost_value = (atoi(val.c_str()) != 0);
+            else if (key == "media_probe") g_media_probe_value = (atoi(val.c_str()) != 0);
             if (key == "enabled" || key == "logging" || key == "sharpen" || key == "clarity" ||
                 key == "temporal" || key == "temporal_strength" || key == "motion_aware" ||
                 key == "motion_threshold" || key == "motion_softness" || key == "material_detail" ||
@@ -1417,6 +1422,8 @@ static void v27_write_runtime_report() {
     out += "frame_buffer_optimization=" + std::to_string(g_v6_frame_buffer_optimization_value ? 1 : 0) + "\n";
     out += "adaptive_texture_enhancement=" + std::to_string(g_v6_adaptive_texture_value) + "\n";
     out += "hdr_enhancement=" + std::to_string(g_v6_hdr_value) + "\n";
+    out += "media_probe=" + std::to_string(g_media_probe_value ? 1 : 0) + "\n";
+    out += "media_probe_active=" + std::to_string(g_media_probe_active ? 1 : 0) + "\n";
 
     const std::string base = g_app_files_dir + "/danzku_v40_runtime_" + std::to_string((int)getpid());
     // Keep the existing .txt as the latest snapshot.
@@ -1965,8 +1972,25 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     const bool config_changed = reload_v27_config_if_changed(false);
     if (was_enabled && !g_v27_enabled_value && g_v27_initialized) v27_release_resources();
     if (config_changed) v27_write_runtime_report();
-    if (g_v27_enabled_value) update_fps_telemetry();
+    if (g_v27_enabled_value && !g_media_probe_active) update_fps_telemetry();
     ++g_hook_calls;
+    if (g_media_probe_active) {
+        // Media mode is deliberately probe-only in this revision. It never calls
+        // the visual shader/reconstruction pipeline and never changes framebuffer
+        // contents, textures, viewport, or swap behavior.
+        static volatile bool media_probe_done = false;
+        if (!media_probe_done) {
+            media_probe_done = true;
+            std::string report = "stage=media_probe\n";
+            report += "pid=" + std::to_string((int)getpid()) + "\n";
+            report += "target=" + g_target_name + "\n";
+            report += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\n";
+            append_egl_gl_probe(report, dpy, surface);
+            write_file(g_app_files_dir + "/danzku_media_probe_" + std::to_string((int)getpid()) + ".txt", report);
+        }
+        if (g_orig_eglSwapBuffers) return g_orig_eglSwapBuffers(dpy, surface);
+        return EGL_FALSE;
+    }
     // Probe only once per process. It observes the current EGL/GL state and does not
     // modify framebuffer contents, viewport, textures, or swap behavior.
     static volatile bool probe_done = false;
@@ -2091,6 +2115,7 @@ static bool parse_map_identity(const char* needle, dev_t& dev, ino_t& ino, std::
 
 struct GotPatchContext {
     const char* library_name;
+    const char* path_filter;
     const char* symbol_name;
     void* replacement;
     void** original_out;
@@ -2109,7 +2134,8 @@ static int patch_got_callback(struct dl_phdr_info* info, size_t, void* opaque) {
     if (!path || !*path) return 0;
     const char* slash = strrchr(path, '/');
     const char* base_name = slash ? slash + 1 : path;
-    if (strcmp(base_name, ctx->library_name) != 0) return 0;
+    if (ctx->library_name && strcmp(base_name, ctx->library_name) != 0) return 0;
+    if (ctx->path_filter && !strstr(path, ctx->path_filter)) return 0;
 
     const ElfW(Phdr)* dynamic_phdr = nullptr;
     for (size_t i = 0; i < info->dlpi_phnum; ++i) {
@@ -2185,6 +2211,7 @@ static int patch_got_callback(struct dl_phdr_info* info, size_t, void* opaque) {
 static bool install_manual_got_hook(std::string& detail, void** got_address, void** original, void** value_after_patch) {
     GotPatchContext ctx{};
     ctx.library_name = "libunity.so";
+    ctx.path_filter = nullptr;
     ctx.symbol_name = "eglSwapBuffers";
     ctx.replacement = reinterpret_cast<void*>(hooked_eglSwapBuffers);
     ctx.original_out = original;
@@ -2196,6 +2223,28 @@ static bool install_manual_got_hook(std::string& detail, void** got_address, voi
         return false;
     }
     detail = ctx.error ? ctx.error : "got_patch_ok";
+    return true;
+}
+
+static bool install_media_probe_got_hook(std::string& detail, void** got_address,
+                                           void** original, void** value_after_patch,
+                                           const std::string& package_name) {
+    // Only inspect/patch an ELF loaded from the target app's own package path.
+    // System/vendor libraries are deliberately excluded by this path filter.
+    GotPatchContext ctx{};
+    ctx.library_name = nullptr;
+    ctx.path_filter = package_name.c_str();
+    ctx.symbol_name = "eglSwapBuffers";
+    ctx.replacement = reinterpret_cast<void*>(hooked_eglSwapBuffers);
+    ctx.original_out = original;
+    dl_iterate_phdr(patch_got_callback, &ctx);
+    if (got_address) *got_address = ctx.found_got;
+    if (value_after_patch) *value_after_patch = ctx.value_after_patch;
+    if (!ctx.success) {
+        detail = ctx.error ? ctx.error : "media_probe_got_not_found";
+        return false;
+    }
+    detail = std::string("media_probe_got_ok:") + (ctx.path ? ctx.path : "(unknown)");
     return true;
 }
 
@@ -2276,7 +2325,7 @@ public:
             usleep(500000);
             bool unity = maps_has("libunity.so");
             bool egl = maps_has("libEGL.so");
-            if (!unity) continue;
+            if (!unity && !g_media_probe_value) continue;
 
             void* handle = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
             void* resolved = handle ? dlsym(handle, "eglSwapBuffers") : nullptr;
@@ -2290,10 +2339,17 @@ public:
             void* got = nullptr;
             g_orig_eglSwapBuffers = nullptr;
             void* got_after = nullptr;
-            bool ok = install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after);
+            g_media_probe_active = false;
+            const std::string package_name = base_package_name(g_target_name);
+            bool ok = unity
+                ? install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after)
+                : install_media_probe_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after, package_name);
             g_hook_installed = ok && g_orig_eglSwapBuffers != nullptr;
+            g_media_probe_active = ok && !unity && g_media_probe_value;
             if (ok) {
-                write_hook_report("install", g_target_name, detail.c_str(), resolved, got, reinterpret_cast<void*>(g_orig_eglSwapBuffers), got_after);
+                write_hook_report(unity ? "install" : "media_probe_install",
+                                  g_target_name, detail.c_str(), resolved, got,
+                                  reinterpret_cast<void*>(g_orig_eglSwapBuffers), got_after);
                 // Keep the process untouched otherwise; periodically verify that the
                 // GOT slot still points at our replacement and record the callback count.
                 for (int verify = 1; verify <= 6; ++verify) {

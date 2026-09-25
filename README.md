@@ -65,3 +65,7 @@ V5.2.26 addresses the verified V5.2.16 skip condition without replacing the prov
 - `service.sh` bootstraps the default target list only when the target file is missing/empty/invalid, then preserves APK-managed changes.
 - The Monitor APK resolves active PID/runtime data from the selected package list and displays the active app dynamically.
 - Target Apps accepts both installed launchable apps and manual package-name input.
+
+
+## Safe Media Probe
+`media_probe=0` is OFF by default. Enable it only for a non-Unity target such as YouTube when testing EGL activity. The probe does not modify frames; it writes `danzku_media_probe_<PID>.txt` under the target app files directory.

@@ -1,3 +1,8 @@
+# V5.2.26 — Safe Media Probe
+- Adds an opt-in `media_probe=0` mode for non-Unity/media targets.
+- Media probe is diagnostic-only: it records EGL/GL context, surface size, renderer and swap activity without running the existing visual shader pipeline.
+- Existing Unity/game hook path is unchanged when `media_probe=0` (default).
+
 # V5.2.26
 
 - Adds Visual Proof A/B telemetry and baseline bypass.

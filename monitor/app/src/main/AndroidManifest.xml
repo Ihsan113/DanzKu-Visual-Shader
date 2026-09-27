@@ -8,13 +8,14 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <application
         android:theme="@style/AppTheme"
-        android:label="DanzKu Monitor V5.2.26 UI FIX"
+        android:label="DanzKu Visual Shader"
         android:allowBackup="false"
         android:supportsRtl="true">
         <service
             android:name=".MonitorTileService"
             android:label="DanzKu Monitor"
-            android:icon="@android:drawable/ic_menu_view"
+            android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
             android:exported="true">
             <intent-filter>

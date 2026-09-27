@@ -12,6 +12,7 @@ import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -139,7 +140,7 @@ public class MainActivity extends Activity {
         TextView v = new TextView(this);
         v.setText(s);
         v.setTextSize(15);
-        v.setTextColor(Color.DKGRAY);
+        v.setTextColor(uiColor("#DCE4F7"));
         v.setPadding(20,12,20,12);
         return v;
     }
@@ -172,24 +173,82 @@ public class MainActivity extends Activity {
 
     int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
 
+    int uiColor(String value) { return Color.parseColor(value); }
+
+    GradientDrawable roundedBg(String color, String stroke, int radiusDp) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(uiColor(color));
+        d.setCornerRadius(dp(radiusDp));
+        if (stroke != null) d.setStroke(dp(1), uiColor(stroke));
+        return d;
+    }
+
+    LinearLayout.LayoutParams cardParams(int top, int bottom) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, dp(top), 0, dp(bottom));
+        return lp;
+    }
+
+    void styleActionButton(Button button) {
+        button.setAllCaps(false);
+        button.setTextSize(14);
+        button.setTextColor(Color.WHITE);
+        button.setTypeface(null, Typeface.BOLD);
+        button.setPadding(dp(18), dp(10), dp(18), dp(10));
+        button.setMinHeight(dp(48));
+        button.setBackground(roundedBg("#5B5CE2", "#7778F5", 14));
+    }
+
+
     void buildUi() {
         ScrollView sv = new ScrollView(this);
+        sv.setFillViewport(true);
+        sv.setClipToPadding(false);
+        sv.setVerticalScrollBarEnabled(false);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(18,18,18,18);
+        root.setPadding(dp(18), dp(20), dp(18), dp(28));
+        root.setBackgroundColor(uiColor("#0B1020"));
 
-        TextView title = tv("DANZKU MONITOR  V5.2.26 UI FIX");
-        title.setTextSize(22);
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        hero.setPadding(dp(20), dp(20), dp(20), dp(18));
+        hero.setBackground(roundedBg("#151C32", "#283454", 22));
+        hero.setLayoutParams(cardParams(0, 14));
+
+        TextView eyebrow = tv("DANZKU  /  VISUAL ENGINE");
+        eyebrow.setTextSize(10);
+        eyebrow.setLetterSpacing(0.12f);
+        eyebrow.setTextColor(uiColor("#9DA8CF"));
+        eyebrow.setPadding(0, 0, 0, dp(6));
+        hero.addView(eyebrow);
+
+        TextView title = tv("Visual Shader");
+        title.setTextSize(26);
         title.setTypeface(null, Typeface.BOLD);
-        title.setTextColor(Color.rgb(94,53,177));
-        root.addView(title);
+        title.setTextColor(Color.WHITE);
+        title.setPadding(0, 0, 0, dp(3));
+        hero.addView(title);
 
-        status = tv("Loading...");
-        root.addView(status);
+        TextView subtitle = tv("Monitor • Tuning • Runtime");
+        subtitle.setTextSize(12);
+        subtitle.setTextColor(uiColor("#AAB4D0"));
+        subtitle.setPadding(0, 0, 0, dp(12));
+        hero.addView(subtitle);
+
+        status = tv("Memuat status...");
+        status.setTextSize(12);
+        status.setTextColor(uiColor("#DCE4FF"));
+        status.setPadding(dp(14), dp(12), dp(14), dp(12));
+        status.setBackground(roundedBg("#0E1528", "#273451", 14));
+        hero.addView(status);
+        root.addView(hero);
 
         addMasterSwitch();
 
         Button targets = new Button(this);
+        styleActionButton(targets);
         targets.setText("TARGET APPS / PACKAGE LIST");
         targets.setMinHeight(dp(60));
         targets.setOnClickListener(v -> showTargetAppsDialog());
@@ -299,12 +358,14 @@ public class MainActivity extends Activity {
         addToggle("Low-Memory History (half resolution)", "ai_low_memory_history");
 
         Button tuning = new Button(this);
+        styleActionButton(tuning);
         tuning.setText("EDIT NILAI VISUAL / CONFIG");
         tuning.setMinHeight(dp(60));
         tuning.setOnClickListener(v -> showVisualConfigEditor());
         root.addView(tuning);
 
         Button overlayPermission = new Button(this);
+        styleActionButton(overlayPermission);
         overlayPermission.setText("AKTIFKAN IZIN OVERLAY");
         overlayPermission.setMinHeight(dp(60));
         overlayPermission.setOnClickListener(v -> requestOverlayPermission());
@@ -312,6 +373,7 @@ public class MainActivity extends Activity {
         root.addView(overlayPermission);
 
         Button overlayButton = new Button(this);
+        styleActionButton(overlayButton);
         overlayButton.setText("START FPS OVERLAY");
         overlayButton.setMinHeight(dp(60));
         overlayButton.setOnClickListener(v -> {
@@ -323,6 +385,7 @@ public class MainActivity extends Activity {
         root.addView(overlayButton);
 
         Button refresh = new Button(this);
+        styleActionButton(refresh);
         refresh.setText("REFRESH STATUS");
         refresh.setMinHeight(dp(60));
         refresh.setOnClickListener(v -> refresh());
@@ -525,6 +588,7 @@ public class MainActivity extends Activity {
         String[] names = {"NATURAL", "VIVID", "CINEMATIC"};
         for (String name : names) {
             Button b = new Button(this);
+        styleActionButton(b);
             b.setText(name);
             b.setAllCaps(false);
             b.setTextSize(14);
@@ -634,15 +698,20 @@ public class MainActivity extends Activity {
     void addSaturationControl() {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(20, 12, 20, 12);
+        box.setPadding(dp(16), dp(12), dp(16), dp(10));
+        box.setBackground(roundedBg("#141C30", "#222D47", 14));
+        box.setLayoutParams(cardParams(0, 8));
 
         TextView title = tv("Saturation Pop");
-        title.setTextSize(16);
+        title.setTextSize(13);
+        title.setTextColor(uiColor("#E7EBF8"));
         title.setTypeface(null, Typeface.BOLD);
+        title.setPadding(0, 0, 0, dp(4));
         box.addView(title);
 
         saturationValueLabel = tv("1.25×");
-        saturationValueLabel.setTextSize(14);
+        saturationValueLabel.setTextSize(12);
+        saturationValueLabel.setTextColor(uiColor("#A5AEFF"));
         box.addView(saturationValueLabel);
 
         saturationSeekBar = new SeekBar(this);
@@ -673,36 +742,61 @@ public class MainActivity extends Activity {
         box.addView(saturationSeekBar);
 
         TextView hint = tv("1.00× native  •  1.25× pop jelas  •  1.50× pop kuat");
-        hint.setTextSize(12);
+        hint.setTextSize(10);
+        hint.setTextColor(uiColor("#8490AF"));
         box.addView(hint);
 
         root.addView(box);
-    }
-
-    void addSectionHeader(String text) {
+    }    void addSectionHeader(String text) {
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.HORIZONTAL);
+        wrap.setGravity(Gravity.CENTER_VERTICAL);
+        wrap.setPadding(dp(2), dp(18), dp(2), dp(8));
         TextView header = tv(text);
-        header.setTextSize(18);
+        header.setTextSize(12);
+        header.setLetterSpacing(0.08f);
         header.setTypeface(null, Typeface.BOLD);
-        header.setTextColor(Color.rgb(94, 53, 177));
-        header.setPadding(20, 24, 20, 8);
-        root.addView(header);
-    }
-
-    void addFloatControl(String title, String key, float min, float max, float def, String barField, String labelField, String format) {
+        header.setTextColor(uiColor("#A5AEFF"));
+        header.setPadding(0, 0, dp(10), 0);
+        wrap.addView(header, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        View line = new View(this);
+        line.setBackgroundColor(uiColor("#26314D"));
+        LinearLayout.LayoutParams lineLp = new LinearLayout.LayoutParams(0, dp(1), 1f);
+        wrap.addView(line, lineLp);
+        root.addView(wrap);
+    }    void addFloatControl(String title, String key, float min, float max, float def, String barField, String labelField, String format) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(20, 12, 20, 12);
+        box.setPadding(dp(16), dp(12), dp(16), dp(10));
+        box.setBackground(roundedBg("#141C30", "#222D47", 14));
+        box.setLayoutParams(cardParams(0, 8));
+
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
         TextView titleView = tv(title);
-        titleView.setTextSize(16);
+        titleView.setTextSize(13);
         titleView.setTypeface(null, Typeface.BOLD);
-        box.addView(titleView);
+        titleView.setTextColor(uiColor("#E7EBF8"));
+        titleView.setPadding(0, 0, dp(8), 0);
+        titleRow.addView(titleView, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         TextView valueLabel = tv(String.format(Locale.US, format, def));
-        valueLabel.setTextSize(14);
-        box.addView(valueLabel);
+        valueLabel.setTextSize(12);
+        valueLabel.setTypeface(null, Typeface.BOLD);
+        valueLabel.setTextColor(uiColor("#A5AEFF"));
+        valueLabel.setGravity(Gravity.CENTER);
+        valueLabel.setPadding(dp(9), dp(4), dp(9), dp(4));
+        valueLabel.setBackground(roundedBg("#222B4A", null, 9));
+        titleRow.addView(valueLabel);
+        box.addView(titleRow);
+
         SeekBar bar = new SeekBar(this);
         int maxProgress = 100;
         bar.setMax(maxProgress);
         bar.setProgress(Math.round((def - min) / (max - min) * maxProgress));
+        bar.setPadding(0, dp(5), 0, dp(5));
         bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 float v = min + (progress / (float)maxProgress) * (max - min);
@@ -724,8 +818,10 @@ public class MainActivity extends Activity {
         box.addView(bar);
         String parentKey = parentForControl(key);
         if (parentKey != null) dependentControls.computeIfAbsent(parentKey, k -> new ArrayList<>()).add(bar);
-        TextView hint = tv("0 = OFF • nilai disimpan ke config dan dikirim ke native bridge");
-        hint.setTextSize(12);
+        TextView hint = tv("Geser untuk mengatur nilai");
+        hint.setTextSize(10);
+        hint.setTextColor(uiColor("#8490AF"));
+        hint.setPadding(0, dp(1), 0, 0);
         box.addView(hint);
         root.addView(box);
         if ("vibranceSeekBar".equals(barField)) { vibranceSeekBar=bar; vibranceValueLabel=valueLabel; }
@@ -932,34 +1028,56 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> Toast.makeText(this, "Gagal encode config: " + e, Toast.LENGTH_LONG).show());
             }
         });
-    }
+    }    void addMasterSwitch() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(18), dp(12), dp(18), dp(12));
+        card.setBackground(roundedBg("#18233B", "#5B5CE2", 18));
+        card.setLayoutParams(cardParams(0, 10));
 
-    void addMasterSwitch() {
+        TextView hint = tv("KONTROL UTAMA");
+        hint.setTextSize(10);
+        hint.setLetterSpacing(0.10f);
+        hint.setTextColor(uiColor("#AAB4D0"));
+        hint.setPadding(0, 0, 0, dp(4));
+        card.addView(hint);
+
         Switch sw = new Switch(this);
         sw.setText("Visual Engine");
-        sw.setTextSize(16);
+        sw.setTextSize(17);
+        sw.setTextColor(Color.WHITE);
+        sw.setTypeface(null, Typeface.BOLD);
         sw.setTag("enabled");
-        sw.setPadding(20,16,20,16);
-        sw.setMinHeight(dp(60));
+        sw.setPadding(0, dp(5), 0, dp(5));
+        sw.setMinHeight(dp(52));
         sw.setOnCheckedChangeListener((button, checked) -> {
             if (button.isPressed()) setFeatureKey("enabled", checked);
         });
         featureSwitches.add(sw);
-        root.addView(sw);
-    }
+        card.addView(sw);
+        root.addView(card);
+    }    void addToggle(String label, String key) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(16), dp(7), dp(14), dp(7));
+        card.setBackground(roundedBg("#141C30", "#222D47", 14));
+        card.setLayoutParams(cardParams(0, 7));
 
-    void addToggle(String label, String key) {
         Switch sw = new Switch(this);
         sw.setText(label);
-        sw.setTextSize(15);
-        sw.setPadding(20,16,20,16);
-        sw.setMinHeight(dp(60));
+        sw.setTextSize(14);
+        sw.setTextColor(uiColor("#E7EBF8"));
+        sw.setPadding(0, dp(3), 0, dp(3));
+        sw.setMinHeight(dp(48));
         sw.setTag(key);
         sw.setOnCheckedChangeListener((button, checked) -> {
             if (button.isPressed()) setFeatureKey(key, checked);
         });
         featureSwitches.add(sw);
-        root.addView(sw);
+        card.addView(sw, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(card);
     }
 
     static class SuResult {
@@ -1028,7 +1146,8 @@ public class MainActivity extends Activity {
     }
 
     void setFeatureKey(String key, boolean on) {
-        // Never block the UI thread with root/shell I/O.
+        // Serialize config edit -> bridge sync -> runtime refresh so a toggle
+        // cannot race with a stale status read.
         ioExecutor.execute(() -> {
             String current = configValue(key);
             if (on) {
@@ -1043,9 +1162,29 @@ public class MainActivity extends Activity {
                 writeConfigValue(key, "0");
             }
             syncNativeControlFromConfigNow();
-            String result = buildStatusText();
-            runOnUiThread(() -> status.setText(result));
+
+            // Force the native side to consume the freshly written bridge/config
+            // before rebuilding the status. Native polls from eglSwapBuffers, so
+            // request a few short refreshes to catch the next runtime report
+            // without making the UI wait on the game process.
+            requestRefreshBurst();
         });
+    }
+
+    void requestRefreshBurst() {
+        final int[] attempt = {0};
+        final Handler h = new Handler(Looper.getMainLooper());
+        final Runnable r = new Runnable() {
+            @Override public void run() {
+                attempt[0]++;
+                ioExecutor.execute(() -> {
+                    String result = buildStatusText();
+                    runOnUiThread(() -> status.setText(result));
+                });
+                if (attempt[0] < 8) h.postDelayed(this, 100);
+            }
+        };
+        h.post(r);
     }
 
     void writeConfigValue(String key, String value) {

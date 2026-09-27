@@ -781,6 +781,14 @@ static void parse_v27_config() {
                 key == "ai_detail_budget" ||
                 key == "ai_motion_complexity" || key == "v9_reconstruction" || key == "v9_reprojection" ||
                 key == "v9_depth_proxy" || key == "v9_history_clip" || key == "v9_responsive" ||
+                key == "v10_antishimmer" || key == "v10_shimmer_strength" || key == "v10_stability_threshold" ||
+                key == "v10_stability_softness" || key == "v10_edge_protection" || key == "v11_detail_preservation" ||
+                key == "v11_ghost_rejection" || key == "v11_detail_threshold" || key == "v11_detail_softness" ||
+                key == "v11_color_clip" || key == "v12_motion_handling" || key == "v12_camera_motion" ||
+                key == "v12_motion_softness" || key == "v12_motion_threshold" || key == "v12_history_response" ||
+                key == "v12_motion_detail_preservation" || key == "poco_m5_tuning" ||
+                key == "poco_m5_quality_scale" || key == "poco_m5_history_scale" || key == "poco_m5_detail_budget" ||
+                key == "poco_m5_temporal_response" || key == "poco_m5_motion_cost" ||
                 key == "temporal_strength" || key == "motion_aware" ||
                 key == "motion_threshold" || key == "motion_softness" || key == "material_detail" ||
                 key == "local_contrast" || key == "highlight_refine" || key == "shadow_refine" ||
@@ -1707,6 +1715,36 @@ static void v27_write_runtime_report() {
     out += "ai_detail_budget=" + std::to_string(g_ai_detail_budget_value) + "\n";
     out += "ai_motion_complexity=" + std::to_string(g_ai_motion_complexity_value) + "\n";
     out += "ai_low_memory_history=" + std::to_string(g_ai_low_memory_history_value ? 1 : 0) + "\n";
+    // V9-V12 + POCO M5 runtime state/value telemetry. These must mirror the
+    // config keys so the monitor can distinguish live runtime state from the
+    // last saved config.
+    out += "v9_reconstruction=" + std::to_string(g_v9_reconstruction_value ? 1 : 0) + "\n";
+    out += "v9_reprojection=" + std::to_string(g_v9_reprojection_value) + "\n";
+    out += "v9_depth_proxy=" + std::to_string(g_v9_depth_proxy_value) + "\n";
+    out += "v9_history_clip=" + std::to_string(g_v9_history_clip_value) + "\n";
+    out += "v9_responsive=" + std::to_string(g_v9_responsive_value) + "\n";
+    out += "v10_antishimmer=" + std::to_string(g_v10_antishimmer_value ? 1 : 0) + "\n";
+    out += "v10_shimmer_strength=" + std::to_string(g_v10_shimmer_strength_value) + "\n";
+    out += "v10_stability_threshold=" + std::to_string(g_v10_stability_threshold_value) + "\n";
+    out += "v10_stability_softness=" + std::to_string(g_v10_stability_softness_value) + "\n";
+    out += "v10_edge_protection=" + std::to_string(g_v10_edge_protection_value) + "\n";
+    out += "v11_detail_preservation=" + std::to_string(g_v11_detail_preservation_value ? 1 : 0) + "\n";
+    out += "v11_ghost_rejection=" + std::to_string(g_v11_ghost_rejection_value) + "\n";
+    out += "v11_detail_threshold=" + std::to_string(g_v11_detail_threshold_value) + "\n";
+    out += "v11_detail_softness=" + std::to_string(g_v11_detail_softness_value) + "\n";
+    out += "v11_color_clip=" + std::to_string(g_v11_color_clip_value) + "\n";
+    out += "v12_motion_handling=" + std::to_string(g_v12_motion_handling_value ? 1 : 0) + "\n";
+    out += "v12_camera_motion=" + std::to_string(g_v12_camera_motion_value) + "\n";
+    out += "v12_motion_softness=" + std::to_string(g_v12_motion_softness_value) + "\n";
+    out += "v12_motion_threshold=" + std::to_string(g_v12_motion_threshold_value) + "\n";
+    out += "v12_history_response=" + std::to_string(g_v12_history_response_value) + "\n";
+    out += "v12_motion_detail_preservation=" + std::to_string(g_v12_motion_detail_preservation_value) + "\n";
+    out += "poco_m5_tuning=" + std::to_string(g_poco_m5_tuning_value ? 1 : 0) + "\n";
+    out += "poco_m5_quality_scale=" + std::to_string(g_poco_m5_quality_scale_value) + "\n";
+    out += "poco_m5_history_scale=" + std::to_string(g_poco_m5_history_scale_value) + "\n";
+    out += "poco_m5_detail_budget=" + std::to_string(g_poco_m5_detail_budget_value) + "\n";
+    out += "poco_m5_temporal_response=" + std::to_string(g_poco_m5_temporal_response_value) + "\n";
+    out += "poco_m5_motion_cost=" + std::to_string(g_poco_m5_motion_cost_value) + "\n";
     out += "ai_history_width=" + std::to_string(g_v28_history_width) + "\n";
     out += "ai_history_height=" + std::to_string(g_v28_history_height) + "\n";
     out += "ai_history_pixels=" + std::to_string((long long)g_v28_history_width * (long long)g_v28_history_height) + "\n";

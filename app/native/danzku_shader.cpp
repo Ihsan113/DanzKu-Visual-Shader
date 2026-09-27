@@ -475,27 +475,47 @@ static std::string config_file_path() {
 
 static void v27_write_runtime_report();
 
+static uint64_t monotonic_ns() {
+    struct timespec ts{};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+           static_cast<uint64_t>(ts.tv_nsec);
+}
+
 static bool reload_v27_config_if_changed(bool force = false) {
     const uint64_t now = monotonic_ns();
     if (!force && g_v27_config_check_ns != 0 &&
-        now - g_v27_config_check_ns < (g_fps_boost_value ? 500000000ULL : 250000000ULL)) return false;
+        now - g_v27_config_check_ns <
+            (g_fps_boost_value ? 500000000ULL : 250000000ULL)) {
+        return false;
+    }
+
     g_v27_config_check_ns = now;
     const std::string path = config_file_path();
     if (path.empty()) return false;
+
     struct stat st{};
     if (stat(path.c_str(), &st) != 0) return false;
+
     const uint64_t mtime_ns =
         static_cast<uint64_t>(st.st_mtim.tv_sec) * 1000000000ULL +
         static_cast<uint64_t>(st.st_mtim.tv_nsec);
+
     const bool config_changed = force ||
-        mtime_ns != g_v27_config_mtime_ns || st.st_size != g_v27_config_size ||
+        mtime_ns != g_v27_config_mtime_ns ||
+        static_cast<off_t>(st.st_size) != g_v27_config_size;
+
     const bool old_enabled = g_v27_enabled_value;
     if (config_changed) {
         parse_v27_config();
         g_v27_config_mtime_ns = mtime_ns;
         g_v27_config_size = st.st_size;
     }
-    const bool control_changed = apply_v27_native_control() && old_enabled != g_v27_enabled_value;
+
+    const bool control_changed =
+        apply_v27_native_control() &&
+        old_enabled != g_v27_enabled_value;
+
     return config_changed || control_changed;
 }
 

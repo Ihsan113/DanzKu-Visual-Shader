@@ -164,6 +164,9 @@ public class MainActivity extends Activity {
         defaultStrengths.put("logging", "1");
         defaultStrengths.put("ram_optimization", "1");
         defaultStrengths.put("fps_boost", "1");
+        defaultStrengths.put("ai_reconstruction_v6", "1");
+        defaultStrengths.put("ai_dynamic_quality", "1");
+        defaultStrengths.put("ai_low_memory_history", "1");
     }
 
     int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
@@ -209,6 +212,27 @@ public class MainActivity extends Activity {
         addToggle("Visual Proof", "visual_proof");
         addToggle("Visual Proof Bypass", "visual_proof_bypass");
         addToggle("DanzKu File Log", "logging");
+
+        TextView aiHeader = tv("AI++ RECONSTRUCTION V6.0–V6.2");
+        aiHeader.setTextSize(19);
+        aiHeader.setTypeface(null, Typeface.BOLD);
+        aiHeader.setTextColor(Color.rgb(94,53,177));
+        root.addView(aiHeader);
+        addToggle("AI++ Reconstruction", "ai_reconstruction_v6");
+        addFloatControl("Motion Estimation (screen-space)", "ai_motion_strength", 0f, 1f, 0.55f, "", "", "%.2f");
+        addFloatControl("Reactive Mask", "ai_reactive_strength", 0f, 1f, 0.35f, "", "", "%.2f");
+        addFloatControl("Anti-Ghosting", "ai_ghost_protection", 0f, 1f, 0.55f, "", "", "%.2f");
+        addFloatControl("Subpixel Reconstruction", "ai_subpixel_strength", 0f, 1f, 0.18f, "", "", "%.2f");
+        addFloatControl("Frequency Detail", "ai_frequency_detail", 0f, 1f, 0.22f, "", "", "%.2f");
+        addFloatControl("Adaptive Edge Sharpen", "ai_edge_sharpen", 0f, 1f, 0.16f, "", "", "%.2f");
+        addFloatControl("Luma / Chroma Reconstruction", "ai_luma_chroma", 0f, 1f, 0.16f, "", "", "%.2f");
+        addFloatControl("Highlight Reconstruction", "ai_highlight_reconstruction", 0f, 1f, 0.08f, "", "", "%.2f");
+        addFloatControl("Shadow Detail Recovery", "ai_shadow_recovery", 0f, 1f, 0.10f, "", "", "%.2f");
+        addFloatControl("Material Reconstruction", "ai_material_reconstruction", 0f, 1f, 0.18f, "", "", "%.2f");
+        addToggle("AI Dynamic Quality", "ai_dynamic_quality");
+        addFloatControl("AI Detail Budget", "ai_detail_budget", 0f, 1f, 0.80f, "", "", "%.2f");
+        addFloatControl("Motion Complexity Scaling", "ai_motion_complexity", 0f, 1f, 0.55f, "", "", "%.2f");
+        addToggle("Low-Memory History (half resolution)", "ai_low_memory_history");
 
         Button tuning = new Button(this);
         tuning.setText("EDIT NILAI VISUAL / CONFIG");
@@ -509,7 +533,7 @@ public class MainActivity extends Activity {
             }
         });
         box.addView(bar);
-        TextView hint = tv("0 = OFF/native • dapat diubah live dari APK");
+        TextView hint = tv("0 = OFF • nilai disimpan ke config dan dikirim ke native bridge");
         hint.setTextSize(12);
         box.addView(hint);
         root.addView(box);

@@ -12,6 +12,48 @@ workflow = (root / '.github/workflows/build.yml').read_text()
 
 errors = []
 
+# Game-only invariants: YouTube/media paths must not be shipped.
+forbidden = [
+    "com.google.android.youtube",
+    "media_engine",
+    "MEDIA_CONF",
+    "danzku_media",
+    "uMedia",
+    "lockYCbCr",
+    "libcodec2_vndk.so",
+]
+forbidden_files = [
+    root / "module/config/media.conf",
+    root / "MEDIA_DIAGNOSTIC_PHASE.txt",
+]
+for token in forbidden:
+    for name, text in {
+        "native": src,
+        "module": (root / "module/service.sh").read_text(),
+        "targets": (root / "module/config/targets.conf").read_text(),
+        "monitor": (root / "monitor/app/src/main/java/com/danzku/monitor/MainActivity.java").read_text(),
+        "tile": (root / "monitor/app/src/main/java/com/danzku/monitor/VisualEngineTileService.java").read_text(),
+        "prop": prop,
+    }.items():
+        if token in text:
+            errors.append(f"forbidden media token in {name}: {token}")
+for path in forbidden_files:
+    if path.exists():
+        errors.append(f"forbidden media file still present: {path.relative_to(root)}")
+
+manifest = (root / "monitor/app/src/main/AndroidManifest.xml").read_text()
+tile_src = (root / "monitor/app/src/main/java/com/danzku/monitor/VisualEngineTileService.java").read_text()
+targets = (root / "module/config/targets.conf").read_text()
+if "android.service.quicksettings.action.QS_TILE" not in manifest:
+    errors.append("Quick Settings tile service is not registered")
+if "extends TileService" not in tile_src:
+    errors.append("Visual Game Quick Settings TileService missing")
+if "com.mobile.legends" not in targets or "com.dts.freefiremax" not in targets:
+    errors.append("expected game targets missing")
+if "com.google.android.youtube" in targets:
+    errors.append("YouTube still present in target allowlist")
+
+
 def check_balance(text, a, b):
     if text.count(a) != text.count(b):
         errors.append(f'unbalanced {a}{b}: {text.count(a)} vs {text.count(b)}')

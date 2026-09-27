@@ -3,7 +3,7 @@ name: Build DanzKu Monitor APK V5.2.26 UI FIX
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'cleanup/**' ]
 
 jobs:
   build:

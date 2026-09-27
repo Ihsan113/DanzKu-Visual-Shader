@@ -191,178 +191,6 @@ static bool ensure_dir(const std::string& path) {
 
 static zygisk::Api* g_api = nullptr;
 using EglSwapBuffersFn = EGLBoolean (*)(EGLDisplay, EGLSurface);
-// YouTube Codec2 YUV POC: ABI-compatible opaque declarations.
-// We intentionally do not include private Android framework headers.
-struct native_handle;
-namespace android { class Rect; }
-struct DanzKuAndroidYCbCr {
-    void* y;
-    void* cb;
-    void* cr;
-    size_t ystride;
-    size_t cstride;
-    size_t chroma_step;
-    uint32_t reserved[8];
-};
-using GraphicBufferLockYCbCrFn = int (*)(const native_handle*, uint32_t, const android::Rect&, DanzKuAndroidYCbCr*);
-static GraphicBufferLockYCbCrFn g_orig_lockYCbCr = nullptr;
-static volatile unsigned long long g_media_ycbcr_calls = 0;
-static volatile unsigned long long g_media_ycbcr_success = 0;
-static volatile unsigned long long g_media_ycbcr_logged = 0;
-static volatile bool g_media_ycbcr_hook_installed = false;
-
-static EglSwapBuffersFn g_orig_eglSwapBuffers = nullptr;
-static volatile unsigned long long g_hook_calls = 0;
-
-static volatile bool g_hook_installed = false;
-
-// V5.2 frame telemetry: read-only measurement around the proven eglSwapBuffers hook.
-// This does not alter frame pacing, refresh rate, GPU clocks, or SurfaceFlinger.
-static pthread_mutex_t g_fps_mutex = PTHREAD_MUTEX_INITIALIZER;
-static uint64_t g_fps_last_ns = 0;
-static double g_fps_current = 0.0;
-static double g_fps_avg = 0.0;
-static double g_frame_time_ms = 0.0;
-static double g_fps_one_percent_low = 0.0;
-static unsigned long long g_fps_samples = 0;
-static unsigned long long g_jank_frames_20ms = 0;
-static double g_fps_window[300] = {};
-static double g_frame_window_ms[300] = {};
-static size_t g_fps_window_count = 0;
-static size_t g_fps_window_pos = 0;
-static double g_fps_window_sum = 0.0;
-
-// Short presentation window for a responsive Render FPS value.
-// It measures frame submissions through the proven eglSwapBuffers hook.
-static uint64_t g_render_window_start_ns = 0;
-static unsigned long long g_render_window_frames = 0;
-
-static uint64_t monotonic_ns() {
-    struct timespec ts{};
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
-    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
-           static_cast<uint64_t>(ts.tv_nsec);
-}
-
-static void update_fps_telemetry() {
-    const uint64_t now = monotonic_ns();
-    if (!now) return;
-
-    pthread_mutex_lock(&g_fps_mutex);
-
-    if (g_fps_last_ns == 0) {
-        g_fps_last_ns = now;
-        g_render_window_start_ns = now;
-        g_render_window_frames = 0;
-        pthread_mutex_unlock(&g_fps_mutex);
-        return;
-    }
-
-    if (now > g_fps_last_ns) {
-        const double ms = static_cast<double>(now - g_fps_last_ns) / 1000000.0;
-
-        if (ms >= 1.0 && ms <= 1000.0) {
-            const double instantaneous_fps = 1000.0 / ms;
-            g_frame_time_ms = ms;
-
-            if (ms > 20.0) ++g_jank_frames_20ms;
-
-            // Realtime Render FPS: count eglSwapBuffers submissions over a
-            // short monotonic window instead of exposing a noisy single-frame
-            // reciprocal. This is read-only telemetry and does not alter swap.
-            if (g_render_window_start_ns == 0) {
-                g_render_window_start_ns = g_fps_last_ns;
-                g_render_window_frames = 0;
-            }
-            ++g_render_window_frames;
-            const uint64_t window_ns = now - g_render_window_start_ns;
-            if (window_ns >= 250000000ULL) {
-                g_fps_current =
-                    (static_cast<double>(g_render_window_frames) * 1000000000.0) /
-                    static_cast<double>(window_ns);
-                g_render_window_start_ns = now;
-                g_render_window_frames = 0;
-            } else if (g_fps_current <= 0.0) {
-                // Make telemetry useful immediately during the first window.
-                g_fps_current = instantaneous_fps;
-            }
-
-            if (g_fps_window_count < 300) {
-                g_fps_window[g_fps_window_count] = instantaneous_fps;
-                g_frame_window_ms[g_fps_window_count] = ms;
-                g_fps_window_sum += instantaneous_fps;
-                ++g_fps_window_count;
-            } else {
-                g_fps_window_sum -= g_fps_window[g_fps_window_pos];
-                g_fps_window[g_fps_window_pos] = instantaneous_fps;
-                g_frame_window_ms[g_fps_window_pos] = ms;
-                g_fps_window_sum += instantaneous_fps;
-                g_fps_window_pos = (g_fps_window_pos + 1) % 300;
-            }
-            ++g_fps_samples;
-
-            // Rolling average is O(1). Recalculate 1% low only periodically;
-            // sorting 300 samples on every swap is unnecessarily expensive.
-            if (g_fps_window_count) {
-                g_fps_avg = g_fps_window_sum /
-                            static_cast<double>(g_fps_window_count);
-            }
-
-            if ((g_fps_samples % 30ULL) == 0ULL || g_fps_window_count == 1) {
-                std::vector<double> sorted(
-                    g_fps_window, g_fps_window + g_fps_window_count);
-                std::sort(sorted.begin(), sorted.end());
-                size_t low_count =
-                    std::max<size_t>(1, (g_fps_window_count + 99) / 100);
-                double low_sum = 0.0;
-                for (size_t i = 0; i < low_count; ++i) {
-                    low_sum += sorted[i];
-                }
-                g_fps_one_percent_low =
-                    low_sum / static_cast<double>(low_count);
-            }
-        } else if (ms > 1000.0) {
-            // A long pause is not a valid instantaneous FPS sample. Reset the
-            // short window so the next active period starts cleanly.
-            g_render_window_start_ns = now;
-            g_render_window_frames = 0;
-        }
-    }
-
-    g_fps_last_ns = now;
-    pthread_mutex_unlock(&g_fps_mutex);
-}
-
-static std::string hex_ptr(const void* p);
-
-static int hooked_lockYCbCr(const native_handle* handle, uint32_t usage,
-                           const android::Rect& rect, DanzKuAndroidYCbCr* ycbcr) {
-    GraphicBufferLockYCbCrFn orig = g_orig_lockYCbCr;
-    if (!orig) return -1;
-
-    const int rc = orig(handle, usage, rect, ycbcr);
-    const unsigned long long call_no =
-        __atomic_add_fetch(&g_media_ycbcr_calls, 1ULL, __ATOMIC_RELAXED);
-
-    if (rc == 0) {
-        __atomic_add_fetch(&g_media_ycbcr_success, 1ULL, __ATOMIC_RELAXED);
-        // Log only the first 16 successful mappings so playback is not flooded.
-        const unsigned long long slot =
-            __atomic_fetch_add(&g_media_ycbcr_logged, 1ULL, __ATOMIC_RELAXED);
-        if (slot < 16 && ycbcr) {
-            char line[1024] = {};
-            snprintf(line, sizeof(line),
-                     "call=%llu rc=%d usage=0x%08x y=%s cb=%s cr=%s ystride=%zu cstride=%zu chroma_step=%zu\n",
-                     call_no, rc, usage, hex_ptr(ycbcr->y).c_str(),
-                     hex_ptr(ycbcr->cb).c_str(), hex_ptr(ycbcr->cr).c_str(),
-                     ycbcr->ystride, ycbcr->cstride, ycbcr->chroma_step);
-            append_file(g_app_files_dir + "/danzku_media_ycbcr.txt", line);
-        }
-    }
-    return rc;
-}
-
-
 static std::string gl_string(GLenum name) {
     const GLubyte* value = glGetString(name);
     return value ? reinterpret_cast<const char*>(value) : "(null)";
@@ -453,14 +281,6 @@ static GLint g_v6_vibrance = -1;
 static GLint g_v6_anisotropic = -1;
 static GLint g_v6_adaptive_texture = -1;
 static GLint g_v6_hdr = -1;
-static GLint g_media_mode = -1;
-static GLint g_media_tone_mapping = -1;
-static GLint g_media_highlight_recovery = -1;
-static GLint g_media_shadow_lift = -1;
-static GLint g_media_local_contrast = -1;
-static GLint g_media_vibrance = -1;
-static GLint g_media_adaptive_detail = -1;
-static GLint g_media_skin_protection = -1;
 static int g_v27_width = 0;
 static int g_v27_height = 0;
 static volatile EGLint g_v27_last_surface_width = 0;
@@ -533,98 +353,6 @@ static float g_v6_adaptive_texture_value = 0.0f;
 static float g_v6_hdr_value = 0.0f;
 static bool g_ram_optimization_value = true;
 static bool g_fps_boost_value = true;
-// Media probe is opt-in and observational. It is OFF by default so existing
-// Unity/game rendering behavior remains unchanged unless explicitly enabled.
-// Media Probe removed: no probe state or hook is used.
-// Media Engine is a separate, opt-in EGL-only profile for the configured media target.
-// It never hooks Codec2, BufferQueue, DRM, or protected decoder paths.
-static bool g_media_engine_value = false;
-static bool g_media_engine_active = false;
-static std::string g_media_target_package = "com.google.android.youtube";
-static bool g_media_require_codec2 = true;
-static int g_media_min_width = 720;
-static int g_media_min_height = 400;
-static float g_media_aspect_tolerance = 0.08f;
-static bool g_media_codec2_present = false;
-static bool g_media_bufferqueue_present = false;
-static bool g_media_video_surface_seen = false;
-static int g_media_last_width = 0;
-static int g_media_last_height = 0;
-static float g_media_tone_mapping_value = 0.22f;
-static float g_media_highlight_recovery_value = 0.18f;
-static float g_media_shadow_lift_value = 0.12f;
-static float g_media_local_contrast_value = 0.10f;
-static float g_media_vibrance_value = 0.12f;
-static float g_media_adaptive_detail_value = 0.08f;
-static float g_media_skin_protection_value = 0.75f;
-static volatile unsigned long long g_media_frame_candidates = 0;
-static volatile unsigned long long g_media_frame_processed = 0;
-
-// Media-config diagnostics: read-only telemetry to distinguish stat/open/read/parse failures.
-static volatile int g_media_config_stat_ok = 0;
-static volatile int g_media_config_open_ok = 0;
-static volatile int g_media_config_read_ok = 0;
-static volatile int g_media_config_last_errno = 0;
-static volatile long long g_media_config_bytes_read = 0;
-static volatile int g_media_config_parse_seen = 0;
-static std::string g_media_config_path_used;
-
-// Media GOT diagnostic-only telemetry. This scanner never changes memory or installs a hook.
-static volatile unsigned long long g_media_diag_libs_seen = 0;
-static volatile unsigned long long g_media_diag_path_filter_skipped = 0;
-static volatile int g_media_diag_target_library_seen = 0;
-static volatile int g_media_diag_target_dynamic_seen = 0;
-static volatile int g_media_diag_target_rela_seen = 0;
-static volatile int g_media_diag_target_egl_symbol_seen = 0;
-static volatile int g_media_diag_target_egl_relocation_found = 0;
-static std::string g_media_diag_target_path;
-static std::string g_media_diag_failure;
-
-
-static void write_media_worker_diag(const char* stage, int attempt = 0, const char* detail = nullptr) {
-    if (!g_v27_logging_value || g_app_files_dir.empty()) return;
-    char path[512] = {};
-    snprintf(path, sizeof(path), "%s/danzku_media_diag_%d.txt",
-             g_app_files_dir.c_str(), (int)getpid());
-    std::string out;
-    out += "stage=";
-    out += stage ? stage : "(null)";
-    out += "\n";
-    out += "pid=" + std::to_string((int)getpid()) + "\n";
-    out += "attempt=" + std::to_string(attempt) + "\n";
-    out += "target=" + g_target_name + "\n";
-    out += "media_engine=" + std::to_string(g_media_engine_value ? 1 : 0) + "\n";
-    out += "media_config_stat_ok=" + std::to_string(g_media_config_stat_ok ? 1 : 0) + "\n";
-    out += "media_config_open_ok=" + std::to_string(g_media_config_open_ok ? 1 : 0) + "\n";
-    out += "media_config_read_ok=" + std::to_string(g_media_config_read_ok ? 1 : 0) + "\n";
-    out += "media_config_parse_seen=" + std::to_string(g_media_config_parse_seen ? 1 : 0) + "\n";
-    out += "media_config_errno=" + std::to_string(g_media_config_last_errno) + "\n";
-    out += "media_config_bytes=" + std::to_string((long long)g_media_config_bytes_read) + "\n";
-    out += "media_config_path=" + (g_media_config_path_used.empty() ? std::string("(none)") : g_media_config_path_used) + "\n";
-    out += "media_diag_libs_seen=" + std::to_string((unsigned long long)g_media_diag_libs_seen) + "\n";
-    out += "media_diag_path_filter_skipped=" + std::to_string((unsigned long long)g_media_diag_path_filter_skipped) + "\n";
-    out += "media_diag_target_library_seen=" + std::to_string(g_media_diag_target_library_seen ? 1 : 0) + "\n";
-    out += "media_diag_target_dynamic_seen=" + std::to_string(g_media_diag_target_dynamic_seen ? 1 : 0) + "\n";
-    out += "media_diag_target_rela_seen=" + std::to_string(g_media_diag_target_rela_seen ? 1 : 0) + "\n";
-    out += "media_diag_target_egl_symbol_seen=" + std::to_string(g_media_diag_target_egl_symbol_seen ? 1 : 0) + "\n";
-    out += "media_diag_target_egl_relocation_found=" + std::to_string(g_media_diag_target_egl_relocation_found ? 1 : 0) + "\n";
-    out += "media_diag_target_path=" + (g_media_diag_target_path.empty() ? std::string("(none)") : g_media_diag_target_path) + "\n";
-    out += "media_diag_failure=" + (g_media_diag_failure.empty() ? std::string("(none)") : g_media_diag_failure) + "\n";
-    out += "media_target_package=" + g_media_target_package + "\n";
-    out += "media_target_match=" +
-           std::to_string((g_media_engine_value && !g_media_target_package.empty() &&
-                            base_package_name(g_target_name) == g_media_target_package) ? 1 : 0) + "\n";
-    out += "codec2_present=" + std::to_string(g_media_codec2_present ? 1 : 0) + "\n";
-    out += "bufferqueue_present=" + std::to_string(g_media_bufferqueue_present ? 1 : 0) + "\n";
-    out += "hook_installed=" + std::to_string(g_hook_installed ? 1 : 0) + "\n";
-    out += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\n";
-    if (detail && *detail) {
-        out += "detail=";
-        out += detail;
-        out += "\n";
-    }
-    write_file(path, out);
-}
 static volatile unsigned long long g_v27_process_calls = 0;
 static volatile unsigned long long g_v27_process_success = 0;
 static volatile unsigned long long g_v27_process_skip = 0;
@@ -710,331 +438,6 @@ static std::string read_small_config() {
 
 
 
-static uint64_t g_media_config_mtime_ns = 0;
-static off_t g_media_config_size = 0;
-
-static std::string media_config_file_path() {
-    // Match the proven Game/visual config access pattern: try open() directly
-    // instead of relying on stat() first. This keeps SELinux/namespace behavior
-    // identical to the working config reader.
-    // The last path is the namespace-safe fallback used by the manual Termux
-    // test. The APK mirrors media.conf there automatically, so no manual cp is
-    // required after this fix.
-    const char* paths[] = {
-        "/data/adb/modules/danzku_visual_shader/config/media.conf",
-        "/proc/self/root/data/adb/modules/danzku_visual_shader/config/media.conf",
-        "/data/local/tmp/danzku_media_config"
-    };
-
-    g_media_config_stat_ok = 0;
-    g_media_config_open_ok = 0;
-    g_media_config_read_ok = 0;
-    g_media_config_last_errno = 0;
-    g_media_config_bytes_read = 0;
-    g_media_config_path_used.clear();
-
-    for (const char* path : paths) {
-        errno = 0;
-        int fd = open(path, O_RDONLY | O_CLOEXEC);
-        if (fd < 0) {
-            g_media_config_last_errno = errno;
-            continue;
-        }
-
-        g_media_config_stat_ok = 1;
-        g_media_config_open_ok = 1;
-        g_media_config_path_used = path;
-        close(fd);
-        return std::string(path);
-    }
-    return "";
-}
-
-static std::string read_media_config() {
-    // The last path is the namespace-safe fallback used by the manual Termux
-    // test. The APK mirrors media.conf there automatically, so no manual cp is
-    // required after this fix.
-    const char* paths[] = {
-        "/data/adb/modules/danzku_visual_shader/config/media.conf",
-        "/proc/self/root/data/adb/modules/danzku_visual_shader/config/media.conf",
-        "/data/local/tmp/danzku_media_config"
-    };
-
-    // Reset telemetry for this read attempt.
-    g_media_config_stat_ok = 0;
-    g_media_config_open_ok = 0;
-    g_media_config_read_ok = 0;
-    g_media_config_last_errno = 0;
-    g_media_config_bytes_read = 0;
-    g_media_config_path_used.clear();
-
-    for (const char* path : paths) {
-        errno = 0;
-        int fd = open(path, O_RDONLY | O_CLOEXEC);
-        if (fd < 0) {
-            g_media_config_last_errno = errno;
-            continue;
-        }
-
-        g_media_config_stat_ok = 1;
-        g_media_config_open_ok = 1;
-
-        char buf[4096] = {};
-        errno = 0;
-        ssize_t n = read(fd, buf, sizeof(buf) - 1);
-        const int read_errno = errno;
-        close(fd);
-
-        if (n > 0) {
-            g_media_config_read_ok = 1;
-            g_media_config_last_errno = 0;
-            g_media_config_bytes_read = static_cast<long long>(n);
-            g_media_config_path_used = path;
-            return std::string(buf, static_cast<size_t>(n));
-        }
-
-        if (n < 0) g_media_config_last_errno = read_errno;
-    }
-
-    return "";
-}
-
-static void parse_media_config() {
-    g_media_config_parse_seen = 0;
-    const std::string cfg = read_media_config();
-    if (cfg.empty()) return;
-    size_t start = 0;
-    while (start < cfg.size()) {
-        size_t end = cfg.find('\n', start);
-        if (end == std::string::npos) end = cfg.size();
-        std::string line = cfg.substr(start, end - start);
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
-        size_t eq = line.find('=');
-        if (eq != std::string::npos) {
-            std::string key = line.substr(0, eq);
-            std::string val = line.substr(eq + 1);
-            if (key == "media_engine") { g_media_engine_value = atoi(val.c_str()) != 0; g_media_config_parse_seen = 1; }
-            else if (key == "media_require_codec2") g_media_require_codec2 = atoi(val.c_str()) != 0;
-            else if (key == "media_min_width") g_media_min_width = std::max(1, atoi(val.c_str()));
-            else if (key == "media_min_height") g_media_min_height = std::max(1, atoi(val.c_str()));
-            else if (key == "media_aspect_tolerance") g_media_aspect_tolerance = strtof(val.c_str(), nullptr);
-            else if (key == "media_target_package") g_media_target_package = trim_copy(val);
-            else if (key == "media_tone_mapping") g_media_tone_mapping_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_highlight_recovery") g_media_highlight_recovery_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_shadow_lift") g_media_shadow_lift_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_local_contrast") g_media_local_contrast_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_vibrance") g_media_vibrance_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_adaptive_detail") g_media_adaptive_detail_value = strtof(val.c_str(), nullptr);
-            else if (key == "media_skin_protection") g_media_skin_protection_value = strtof(val.c_str(), nullptr);
-        }
-        start = end + 1;
-    }
-    g_media_tone_mapping_value = std::max(0.0f, std::min(1.0f, g_media_tone_mapping_value));
-    g_media_highlight_recovery_value = std::max(0.0f, std::min(1.0f, g_media_highlight_recovery_value));
-    g_media_shadow_lift_value = std::max(0.0f, std::min(1.0f, g_media_shadow_lift_value));
-    g_media_local_contrast_value = std::max(0.0f, std::min(1.0f, g_media_local_contrast_value));
-    g_media_vibrance_value = std::max(0.0f, std::min(1.0f, g_media_vibrance_value));
-    g_media_adaptive_detail_value = std::max(0.0f, std::min(1.0f, g_media_adaptive_detail_value));
-    g_media_skin_protection_value = std::max(0.0f, std::min(1.0f, g_media_skin_protection_value));
-}
-
-static volatile int g_v27_config_read_success = 0;
-static volatile int g_v27_config_parse_success = 0;
-static volatile unsigned long long g_v27_config_sync_count = 0;
-static void parse_v27_config() {
-    g_v27_config_read_success = 0;
-    g_v27_config_parse_success = 0;
-    ++g_v27_config_sync_count;
-    g_v27_config_path_used.clear();
-
-    // Media configuration is independent from visual.conf. Parse it first so
-    // Media Engine can initialize even when the visual config is unavailable
-    // from the app/zygote SELinux context.
-    parse_media_config();
-
-    std::string cfg = read_small_config();
-    g_v27_config_read_success = !cfg.empty();
-
-    if (cfg.empty()) return;
-    size_t start = 0;
-    while (start < cfg.size()) {
-        size_t end = cfg.find('\n', start);
-        if (end == std::string::npos) end = cfg.size();
-        std::string line = cfg.substr(start, end - start);
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
-        size_t eq = line.find('=');
-        if (eq != std::string::npos) {
-            std::string key = line.substr(0, eq);
-            std::string val = line.substr(eq + 1);
-            if (key == "enabled") g_v27_enabled_value = (atoi(val.c_str()) != 0);
-            else if (key == "logging") g_v27_logging_value = (atoi(val.c_str()) != 0);
-            else if (key == "sharpen") g_v27_sharpen_value = strtof(val.c_str(), nullptr);
-            else if (key == "clarity") g_v27_clarity_value = strtof(val.c_str(), nullptr);
-            else if (key == "temporal") g_v28_temporal_value = (atoi(val.c_str()) != 0);
-            else if (key == "temporal_strength") g_v28_temporal_strength = strtof(val.c_str(), nullptr);
-            else if (key == "motion_aware") g_v285_motion_aware_value = (atoi(val.c_str()) != 0);
-            else if (key == "motion_threshold") g_v285_motion_threshold_value = strtof(val.c_str(), nullptr);
-            else if (key == "motion_softness") g_v285_motion_softness_value = strtof(val.c_str(), nullptr);
-            else if (key == "material_detail") g_v291_material_detail_value = strtof(val.c_str(), nullptr);
-            else if (key == "local_contrast") g_v291_local_contrast_value = strtof(val.c_str(), nullptr);
-            else if (key == "highlight_refine") g_v291_highlight_refine_value = strtof(val.c_str(), nullptr);
-            else if (key == "shadow_refine") g_v291_shadow_refine_value = strtof(val.c_str(), nullptr);
-            else if (key == "edge_aware") g_v295_edge_aware_value = (atoi(val.c_str()) != 0);
-            else if (key == "edge_strength") g_v295_edge_strength_value = strtof(val.c_str(), nullptr);
-            else if (key == "edge_threshold") g_v295_edge_threshold_value = strtof(val.c_str(), nullptr);
-            else if (key == "edge_softness") g_v295_edge_softness_value = strtof(val.c_str(), nullptr);
-            else if (key == "reconstruction_output") { g_v27_reconstruction_output_value = (atoi(val.c_str()) != 0); g_v27_config_reconstruction_key_seen = 1; }
-            else if (key == "visual_proof") g_v26_visual_proof_value = (atoi(val.c_str()) != 0);
-            else if (key == "visual_proof_bypass") g_v26_visual_proof_bypass = (atoi(val.c_str()) != 0);
-            else if (key == "reconstruction") g_v30_reconstruction_value = strtof(val.c_str(), nullptr);
-            else if (key == "dynamic_quality") g_v31_dynamic_quality_value = (atoi(val.c_str()) != 0);
-            else if (key == "quality_min") g_v31_quality_min_value = strtof(val.c_str(), nullptr);
-            else if (key == "quality_max") g_v31_quality_max_value = strtof(val.c_str(), nullptr);
-            else if (key == "temporal_detail_recovery") g_v32_temporal_recovery_value = (atoi(val.c_str()) != 0);
-            else if (key == "recovery_strength") g_v32_recovery_strength_value = strtof(val.c_str(), nullptr);
-            else if (key == "recovery_threshold") g_v32_recovery_threshold_value = strtof(val.c_str(), nullptr);
-            else if (key == "reconstruction_confidence") g_v33_confidence_value = (atoi(val.c_str()) != 0);
-            else if (key == "confidence_strength") g_v33_confidence_strength_value = strtof(val.c_str(), nullptr);
-            else if (key == "confidence_threshold") g_v33_confidence_threshold_value = strtof(val.c_str(), nullptr);
-            else if (key == "confidence_softness") g_v33_confidence_softness_value = strtof(val.c_str(), nullptr);
-            else if (key == "neural_style_reconstruction") g_v35_neural_style_value = (atoi(val.c_str()) != 0);
-            else if (key == "neural_strength") g_v35_neural_strength_value = strtof(val.c_str(), nullptr);
-            else if (key == "structure_strength") g_v35_structure_strength_value = strtof(val.c_str(), nullptr);
-            else if (key == "high_end_reconstruction") g_v40_high_end_value = (atoi(val.c_str()) != 0);
-            else if (key == "high_end_strength") g_v40_high_end_strength_value = strtof(val.c_str(), nullptr);
-            else if (key == "advanced_aa") g_v5_aa_value = (atoi(val.c_str()) != 0);
-            else if (key == "aa_strength") g_v5_aa_strength_value = strtof(val.c_str(), nullptr);
-            else if (key == "shadow_enhancement") g_v5_shadow_value = strtof(val.c_str(), nullptr);
-            else if (key == "shadow_stability") g_v5_shadow_stability_value = strtof(val.c_str(), nullptr);
-            else if (key == "contact_shadow") g_v5_contact_shadow_value = strtof(val.c_str(), nullptr);
-            else if (key == "ao_enhancement") g_v5_ao_value = strtof(val.c_str(), nullptr);
-            else if (key == "specular_enhancement") g_v5_specular_value = strtof(val.c_str(), nullptr);
-            else if (key == "reflection_approximation") g_v5_reflection_value = strtof(val.c_str(), nullptr);
-            else if (key == "lighting_enhancement") g_v5_lighting_value = strtof(val.c_str(), nullptr);
-            else if (key == "effect_enhancement") g_v5_effect_value = strtof(val.c_str(), nullptr);
-            else if (key == "saturation") g_v5_saturation_value = strtof(val.c_str(), nullptr);
-            else if (key == "vibrance") g_v6_vibrance_value = strtof(val.c_str(), nullptr);
-            else if (key == "anisotropic_enhancement") g_v6_anisotropic_value = strtof(val.c_str(), nullptr);
-            else if (key == "frame_buffer_optimization") g_v6_frame_buffer_optimization_value = (atoi(val.c_str()) != 0);
-            else if (key == "adaptive_texture_enhancement") g_v6_adaptive_texture_value = strtof(val.c_str(), nullptr);
-            else if (key == "hdr_enhancement") g_v6_hdr_value = strtof(val.c_str(), nullptr);
-            else if (key == "ram_optimization") g_ram_optimization_value = (atoi(val.c_str()) != 0);
-            else if (key == "fps_boost") g_fps_boost_value = (atoi(val.c_str()) != 0);
-            if (key == "enabled" || key == "logging" || key == "sharpen" || key == "clarity" ||
-                key == "temporal" || key == "temporal_strength" || key == "motion_aware" ||
-                key == "motion_threshold" || key == "motion_softness" || key == "material_detail" ||
-                key == "local_contrast" || key == "highlight_refine" || key == "shadow_refine" ||
-                key == "edge_aware" || key == "edge_strength" || key == "edge_threshold" ||
-                key == "edge_softness" || key == "reconstruction_output" || key == "visual_proof" || key == "visual_proof_bypass" || key == "reconstruction" ||
-                key == "dynamic_quality" || key == "quality_min" || key == "quality_max" ||
-                key == "temporal_detail_recovery" || key == "recovery_strength" || key == "recovery_threshold" ||
-                key == "reconstruction_confidence" || key == "confidence_strength" || key == "confidence_threshold" ||
-                key == "confidence_softness" || key == "neural_style_reconstruction" || key == "neural_strength" ||
-                key == "structure_strength" || key == "high_end_reconstruction" || key == "high_end_strength" ||
-                key == "advanced_aa" || key == "aa_strength" || key == "shadow_enhancement" ||
-                key == "shadow_stability" || key == "contact_shadow" || key == "ao_enhancement" ||
-                key == "specular_enhancement" || key == "reflection_approximation" ||
-                key == "lighting_enhancement" || key == "effect_enhancement" || key == "saturation" ||
-                key == "vibrance" || key == "anisotropic_enhancement" || key == "frame_buffer_optimization" ||
-                key == "adaptive_texture_enhancement" || key == "hdr_enhancement" ||
-key == "ram_optimization" || key == "fps_boost") {
-                g_v27_config_parse_success = 1;
-            }
-        }
-        start = end + 1;
-    }
-    if (g_v27_sharpen_value < 0.0f) g_v27_sharpen_value = 0.0f;
-    if (g_v27_sharpen_value > 0.50f) g_v27_sharpen_value = 0.50f;
-    if (g_v27_clarity_value < 0.0f) g_v27_clarity_value = 0.0f;
-    if (g_v27_clarity_value > 0.30f) g_v27_clarity_value = 0.30f;
-    if (g_v28_temporal_strength < 0.0f) g_v28_temporal_strength = 0.0f;
-    if (g_v28_temporal_strength > 0.50f) g_v28_temporal_strength = 0.50f;
-    if (g_v285_motion_threshold_value < 0.0f) g_v285_motion_threshold_value = 0.0f;
-    if (g_v285_motion_threshold_value > 0.50f) g_v285_motion_threshold_value = 0.50f;
-    if (g_v285_motion_softness_value < 0.001f) g_v285_motion_softness_value = 0.001f;
-    if (g_v285_motion_softness_value > 0.50f) g_v285_motion_softness_value = 0.50f;
-    if (g_v291_material_detail_value < 0.0f) g_v291_material_detail_value = 0.0f;
-    if (g_v291_material_detail_value > 0.50f) g_v291_material_detail_value = 0.50f;
-    if (g_v291_local_contrast_value < 0.0f) g_v291_local_contrast_value = 0.0f;
-    if (g_v291_local_contrast_value > 0.50f) g_v291_local_contrast_value = 0.50f;
-    if (g_v291_highlight_refine_value < 0.0f) g_v291_highlight_refine_value = 0.0f;
-    if (g_v291_highlight_refine_value > 0.50f) g_v291_highlight_refine_value = 0.50f;
-    if (g_v291_shadow_refine_value < 0.0f) g_v291_shadow_refine_value = 0.0f;
-    if (g_v291_shadow_refine_value > 0.50f) g_v291_shadow_refine_value = 0.50f;
-    if (g_v295_edge_strength_value < 0.0f) g_v295_edge_strength_value = 0.0f;
-    if (g_v295_edge_strength_value > 0.50f) g_v295_edge_strength_value = 0.50f;
-    if (g_v295_edge_threshold_value < 0.001f) g_v295_edge_threshold_value = 0.001f;
-    if (g_v295_edge_threshold_value > 0.50f) g_v295_edge_threshold_value = 0.50f;
-    if (g_v295_edge_softness_value < 0.001f) g_v295_edge_softness_value = 0.001f;
-    if (g_v295_edge_softness_value > 0.50f) g_v295_edge_softness_value = 0.50f;
-    if (g_v30_reconstruction_value < 0.0f) g_v30_reconstruction_value = 0.0f;
-    if (g_v30_reconstruction_value > 1.0f) g_v30_reconstruction_value = 1.0f;
-    if (g_v31_quality_min_value < 0.25f) g_v31_quality_min_value = 0.25f;
-    if (g_v31_quality_min_value > 1.0f) g_v31_quality_min_value = 1.0f;
-    if (g_v31_quality_max_value < 0.50f) g_v31_quality_max_value = 0.50f;
-    if (g_v31_quality_max_value > 1.25f) g_v31_quality_max_value = 1.25f;
-    if (g_v31_quality_max_value < g_v31_quality_min_value) g_v31_quality_max_value = g_v31_quality_min_value;
-    if (g_v32_recovery_strength_value < 0.0f) g_v32_recovery_strength_value = 0.0f;
-    if (g_v32_recovery_strength_value > 0.30f) g_v32_recovery_strength_value = 0.30f;
-    if (g_v32_recovery_threshold_value < 0.001f) g_v32_recovery_threshold_value = 0.001f;
-    if (g_v32_recovery_threshold_value > 0.50f) g_v32_recovery_threshold_value = 0.50f;
-    if (g_v33_confidence_strength_value < 0.0f) g_v33_confidence_strength_value = 0.0f;
-    if (g_v33_confidence_strength_value > 1.0f) g_v33_confidence_strength_value = 1.0f;
-    if (g_v33_confidence_threshold_value < 0.001f) g_v33_confidence_threshold_value = 0.001f;
-    if (g_v33_confidence_threshold_value > 0.50f) g_v33_confidence_threshold_value = 0.50f;
-    if (g_v33_confidence_softness_value < 0.005f) g_v33_confidence_softness_value = 0.005f;
-    if (g_v33_confidence_softness_value > 0.50f) g_v33_confidence_softness_value = 0.50f;
-    if (g_v35_neural_strength_value < 0.0f) g_v35_neural_strength_value = 0.0f;
-    if (g_v35_neural_strength_value > 0.30f) g_v35_neural_strength_value = 0.30f;
-    if (g_v35_structure_strength_value < 0.0f) g_v35_structure_strength_value = 0.0f;
-    if (g_v35_structure_strength_value > 1.0f) g_v35_structure_strength_value = 1.0f;
-    if (g_v40_high_end_strength_value < 0.0f) g_v40_high_end_strength_value = 0.0f;
-    if (g_v40_high_end_strength_value > 1.0f) g_v40_high_end_strength_value = 1.0f;
-    if (g_v5_aa_strength_value < 0.0f) g_v5_aa_strength_value = 0.0f;
-    if (g_v5_aa_strength_value > 0.50f) g_v5_aa_strength_value = 0.50f;
-    if (g_v5_shadow_value < 0.0f) g_v5_shadow_value = 0.0f;
-    if (g_v5_shadow_value > 0.50f) g_v5_shadow_value = 0.50f;
-    if (g_v5_shadow_stability_value < 0.0f) g_v5_shadow_stability_value = 0.0f;
-    if (g_v5_shadow_stability_value > 0.50f) g_v5_shadow_stability_value = 0.50f;
-    if (g_v5_contact_shadow_value < 0.0f) g_v5_contact_shadow_value = 0.0f;
-    if (g_v5_contact_shadow_value > 0.50f) g_v5_contact_shadow_value = 0.50f;
-    if (g_v5_ao_value < 0.0f) g_v5_ao_value = 0.0f;
-    if (g_v5_ao_value > 0.50f) g_v5_ao_value = 0.50f;
-    if (g_v5_specular_value < 0.0f) g_v5_specular_value = 0.0f;
-    if (g_v5_specular_value > 0.50f) g_v5_specular_value = 0.50f;
-    if (g_v5_reflection_value < 0.0f) g_v5_reflection_value = 0.0f;
-    if (g_v5_reflection_value > 0.50f) g_v5_reflection_value = 0.50f;
-    if (g_v5_lighting_value < 0.0f) g_v5_lighting_value = 0.0f;
-    if (g_v5_lighting_value > 0.50f) g_v5_lighting_value = 0.50f;
-    if (g_v5_effect_value < 0.0f) g_v5_effect_value = 0.0f;
-    if (g_v5_effect_value > 0.50f) g_v5_effect_value = 0.50f;
-    if (g_v5_saturation_value < 0.0f) g_v5_saturation_value = 0.0f;
-    if (g_v5_saturation_value > 1.50f) g_v5_saturation_value = 1.50f;
-    if (g_v6_vibrance_value < 0.0f) g_v6_vibrance_value = 0.0f;
-    if (g_v6_vibrance_value > 1.0f) g_v6_vibrance_value = 1.0f;
-    if (g_v6_anisotropic_value < 0.0f) g_v6_anisotropic_value = 0.0f;
-    if (g_v6_anisotropic_value > 16.0f) g_v6_anisotropic_value = 16.0f;
-    if (g_v6_adaptive_texture_value < 0.0f) g_v6_adaptive_texture_value = 0.0f;
-    if (g_v6_adaptive_texture_value > 0.50f) g_v6_adaptive_texture_value = 0.50f;
-    if (g_v6_hdr_value < 0.0f) g_v6_hdr_value = 0.0f;
-    if (g_v6_hdr_value > 1.0f) g_v6_hdr_value = 1.0f;
-    if (g_media_tone_mapping_value < 0.0f) g_media_tone_mapping_value = 0.0f;
-    if (g_media_tone_mapping_value > 1.0f) g_media_tone_mapping_value = 1.0f;
-    if (g_media_highlight_recovery_value < 0.0f) g_media_highlight_recovery_value = 0.0f;
-    if (g_media_highlight_recovery_value > 1.0f) g_media_highlight_recovery_value = 1.0f;
-    if (g_media_shadow_lift_value < 0.0f) g_media_shadow_lift_value = 0.0f;
-    if (g_media_shadow_lift_value > 1.0f) g_media_shadow_lift_value = 1.0f;
-    if (g_media_local_contrast_value < 0.0f) g_media_local_contrast_value = 0.0f;
-    if (g_media_local_contrast_value > 1.0f) g_media_local_contrast_value = 1.0f;
-    if (g_media_vibrance_value < 0.0f) g_media_vibrance_value = 0.0f;
-    if (g_media_vibrance_value > 1.0f) g_media_vibrance_value = 1.0f;
-    if (g_media_adaptive_detail_value < 0.0f) g_media_adaptive_detail_value = 0.0f;
-    if (g_media_adaptive_detail_value > 1.0f) g_media_adaptive_detail_value = 1.0f;
-    if (g_media_skin_protection_value < 0.0f) g_media_skin_protection_value = 0.0f;
-    if (g_media_skin_protection_value > 1.0f) g_media_skin_protection_value = 1.0f;
-}
-
-
 static bool apply_v27_native_control() {
     const char* path = "/data/local/tmp/danzku_visual_engine";
     int fd = open(path, O_RDONLY | O_CLOEXEC);
@@ -1084,23 +487,13 @@ static bool reload_v27_config_if_changed(bool force = false) {
     const uint64_t mtime_ns =
         static_cast<uint64_t>(st.st_mtim.tv_sec) * 1000000000ULL +
         static_cast<uint64_t>(st.st_mtim.tv_nsec);
-    const std::string media_path = media_config_file_path();
-    struct stat media_st{};
-    const bool media_stat_ok = !media_path.empty() && stat(media_path.c_str(), &media_st) == 0;
-    const uint64_t media_mtime_ns = media_stat_ok
-        ? static_cast<uint64_t>(media_st.st_mtim.tv_sec) * 1000000000ULL +
-          static_cast<uint64_t>(media_st.st_mtim.tv_nsec) : 0ULL;
-    const off_t media_size = media_stat_ok ? media_st.st_size : 0;
     const bool config_changed = force ||
         mtime_ns != g_v27_config_mtime_ns || st.st_size != g_v27_config_size ||
-        media_mtime_ns != g_media_config_mtime_ns || media_size != g_media_config_size;
     const bool old_enabled = g_v27_enabled_value;
     if (config_changed) {
         parse_v27_config();
         g_v27_config_mtime_ns = mtime_ns;
         g_v27_config_size = st.st_size;
-        g_media_config_mtime_ns = media_mtime_ns;
-        g_media_config_size = media_size;
     }
     const bool control_changed = apply_v27_native_control() && old_enabled != g_v27_enabled_value;
     return config_changed || control_changed;
@@ -1127,40 +520,6 @@ static void cleanup_danzku_files() {
     closedir(dir);
 }
 
-static bool media_engine_target_matches() {
-    const std::string package_name = base_package_name(g_target_name);
-    return g_media_engine_value && !g_media_target_package.empty() &&
-           package_name == g_media_target_package;
-}
-
-static bool media_surface_candidate(EGLDisplay dpy, EGLSurface surface, EGLint* width_out, EGLint* height_out) {
-    if (width_out) *width_out = 0;
-    if (height_out) *height_out = 0;
-    if (dpy == EGL_NO_DISPLAY || surface == EGL_NO_SURFACE) return false;
-    EGLint w = 0, h = 0;
-    if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE ||
-        eglQuerySurface(dpy, surface, EGL_HEIGHT, &h) != EGL_TRUE || w <= 0 || h <= 0) return false;
-    if (width_out) *width_out = w;
-    if (height_out) *height_out = h;
-
-    // Read-only gate based on the discovered YouTube media stack. We do not
-    // hook lockYCbCr(), C2AllocationGralloc::map(), BufferQueue, or decoder memory.
-    if (g_media_require_codec2 && (!g_media_codec2_present || !g_media_bufferqueue_present)) return false;
-
-    const float aspect = static_cast<float>(w) / static_cast<float>(h);
-    const float err16 = fabsf(aspect - (16.0f / 9.0f)) / (16.0f / 9.0f);
-    const float tolerance = std::max(0.01f, std::min(0.30f, g_media_aspect_tolerance));
-    const bool candidate = w >= g_media_min_width &&
-                           h >= g_media_min_height &&
-                           err16 <= tolerance;
-    if (candidate) {
-        g_media_video_surface_seen = true;
-        g_media_last_width = w;
-        g_media_last_height = h;
-    }
-    return candidate;
-}
-
 static GLuint v27_compile_shader(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
     if (!shader) return 0;
@@ -1175,7 +534,7 @@ static GLuint v27_compile_shader(GLenum type, const char* source) {
     return shader;
 }
 
-static bool v27_init(int width, int height, bool media_mode_init = false) {
+static bool v27_init(int width, int height) {
     pthread_mutex_lock(&g_v27_mutex);
     if (g_v27_initialized) { pthread_mutex_unlock(&g_v27_mutex); return true; }
     if (g_v27_failed || width <= 0 || height <= 0) { pthread_mutex_unlock(&g_v27_mutex); return false; }
@@ -1194,7 +553,7 @@ static bool v27_init(int width, int height, bool media_mode_init = false) {
     }
     g_v27_width = width;
     g_v27_height = height;
-    if (!g_v27_enabled_value && !(media_mode_init && g_media_engine_active)) {
+    if (!g_v27_enabled_value) {
         pthread_mutex_unlock(&g_v27_mutex);
         return false;
     }
@@ -1256,14 +615,6 @@ static bool v27_init(int width, int height, bool media_mode_init = false) {
         "uniform float uAnisotropic;"
         "uniform float uAdaptiveTexture;"
         "uniform float uHDR;"
-        "uniform float uMediaMode;"
-        "uniform float uMediaToneMapping;"
-        "uniform float uMediaHighlightRecovery;"
-        "uniform float uMediaShadowLift;"
-        "uniform float uMediaLocalContrast;"
-        "uniform float uMediaVibrance;"
-        "uniform float uMediaAdaptiveDetail;"
-        "uniform float uMediaSkinProtection;"
         "varying vec2 vUV;"
         "void main(){"
         " vec4 sampleC=texture2D(uTex,vUV);"
@@ -1380,24 +731,7 @@ static bool v27_init(int width, int height, bool media_mode_init = false) {
         " vec3 hdrColor=textureColor+textureColor*hdrShadowLift;"
         " hdrColor=hdrColor/(1.0+hdrHighlightCompress*max(lum,0.001));"
         " hdrColor=clamp(hdrColor,vec3(0.0),vec3(1.0));"
-        // Media profile: lightweight HDR-like reconstruction for an EGL-presented
-        // frame. This is not HDR10+ metadata generation and is intentionally
-        // independent of Codec2/DRM paths.
-        " float mediaLum=dot(hdrColor,vec3(0.2126,0.7152,0.0722));"
-        " float mediaShadow=1.0-smoothstep(0.05,0.42,mediaLum);"
-        " float mediaHighlight=smoothstep(0.55,0.96,mediaLum);"
-        " vec3 mediaLocal=hdrColor+(hdrColor-vec3(lumA))*uMediaLocalContrast*0.45;"
-        " float mediaChroma=max(max(mediaLocal.r,mediaLocal.g),mediaLocal.b)-min(min(mediaLocal.r,mediaLocal.g),mediaLocal.b);"
-        " vec3 mediaVibrant=vec3(dot(mediaLocal,vec3(0.2126,0.7152,0.0722)))+(mediaLocal-vec3(dot(mediaLocal,vec3(0.2126,0.7152,0.0722))))*(1.0+uMediaVibrance*(1.0-smoothstep(0.02,0.75,mediaChroma)));"
-        " vec3 mediaDetail=mediaVibrant+detail*(uMediaAdaptiveDetail*smoothstep(0.005,0.10,edgeRaw));"
-        " vec3 mediaRecovered=mediaDetail+mediaDetail*mediaShadow*uMediaShadowLift;"
-        " mediaRecovered=mediaRecovered/(1.0+mediaHighlight*uMediaToneMapping*max(mediaLum,0.001));"
-        " float skinLike=smoothstep(0.18,0.48,mediaRecovered.r-mediaRecovered.g)*smoothstep(0.03,0.24,mediaRecovered.g-mediaRecovered.b);"
-        " float skinGate=1.0-skinLike*uMediaSkinProtection;"
-        " mediaRecovered=mix(mediaVibrant,mediaRecovered,skinGate);"
-        " vec3 mediaOutput=clamp(mediaRecovered+mediaRecovered*mediaHighlight*uMediaHighlightRecovery,vec3(0.0),vec3(1.0));"
-        " vec3 finalColor=mix(hdrColor,mediaOutput,clamp(uMediaMode,0.0,1.0));"
-        " gl_FragColor=vec4(mix(c,finalColor,uEnabled),sampleC.a);"
+        " gl_FragColor=vec4(mix(c,hdrColor,uEnabled),sampleC.a);"
         "}";
 
     GLuint v = v27_compile_shader(GL_VERTEX_SHADER, vs);
@@ -1473,14 +807,6 @@ static bool v27_init(int width, int height, bool media_mode_init = false) {
     g_v6_anisotropic = glGetUniformLocation(g_v27_program, "uAnisotropic");
     g_v6_adaptive_texture = glGetUniformLocation(g_v27_program, "uAdaptiveTexture");
     g_v6_hdr = glGetUniformLocation(g_v27_program, "uHDR");
-    g_media_mode = glGetUniformLocation(g_v27_program, "uMediaMode");
-    g_media_tone_mapping = glGetUniformLocation(g_v27_program, "uMediaToneMapping");
-    g_media_highlight_recovery = glGetUniformLocation(g_v27_program, "uMediaHighlightRecovery");
-    g_media_shadow_lift = glGetUniformLocation(g_v27_program, "uMediaShadowLift");
-    g_media_local_contrast = glGetUniformLocation(g_v27_program, "uMediaLocalContrast");
-    g_media_vibrance = glGetUniformLocation(g_v27_program, "uMediaVibrance");
-    g_media_adaptive_detail = glGetUniformLocation(g_v27_program, "uMediaAdaptiveDetail");
-    g_media_skin_protection = glGetUniformLocation(g_v27_program, "uMediaSkinProtection");
 
     glGenTextures(1, &g_v27_texture);
     glBindTexture(GL_TEXTURE_2D, g_v27_texture);
@@ -1792,31 +1118,6 @@ static void v27_write_runtime_report() {
     out += "frame_buffer_optimization=" + std::to_string(g_v6_frame_buffer_optimization_value ? 1 : 0) + "\n";
     out += "adaptive_texture_enhancement=" + std::to_string(g_v6_adaptive_texture_value) + "\n";
     out += "hdr_enhancement=" + std::to_string(g_v6_hdr_value) + "\n";
-    out += "media_engine=" + std::to_string(g_media_engine_value ? 1 : 0) + "\n";
-    out += "media_engine_active=" + std::to_string(g_media_engine_active ? 1 : 0) + "\n";
-    out += "media_engine_route=codec2_identity_gate_plus_egl_framebuffer\n";
-    out += "media_codec2_present=" + std::to_string(g_media_codec2_present ? 1 : 0) + "\n";
-    out += "media_bufferqueue_present=" + std::to_string(g_media_bufferqueue_present ? 1 : 0) + "\n";
-    out += "media_video_surface_seen=" + std::to_string(g_media_video_surface_seen ? 1 : 0) + "\n";
-    out += "media_last_width=" + std::to_string(g_media_last_width) + "\n";
-    out += "media_last_height=" + std::to_string(g_media_last_height) + "\n";
-    out += "media_require_codec2=" + std::to_string(g_media_require_codec2 ? 1 : 0) + "\n";
-    out += "media_min_width=" + std::to_string(g_media_min_width) + "\n";
-    out += "media_min_height=" + std::to_string(g_media_min_height) + "\n";
-    out += "media_aspect_tolerance=" + std::to_string(g_media_aspect_tolerance) + "\n";
-    out += "media_target_package=" + g_media_target_package + "\n";
-    out += "media_tone_mapping=" + std::to_string(g_media_tone_mapping_value) + "\n";
-    out += "media_highlight_recovery=" + std::to_string(g_media_highlight_recovery_value) + "\n";
-    out += "media_shadow_lift=" + std::to_string(g_media_shadow_lift_value) + "\n";
-    out += "media_local_contrast=" + std::to_string(g_media_local_contrast_value) + "\n";
-    out += "media_vibrance=" + std::to_string(g_media_vibrance_value) + "\n";
-    out += "media_adaptive_detail=" + std::to_string(g_media_adaptive_detail_value) + "\n";
-    out += "media_skin_protection=" + std::to_string(g_media_skin_protection_value) + "\n";
-    out += "media_frame_candidates=" + std::to_string((unsigned long long)g_media_frame_candidates) + "\n";
-    out += "media_frame_processed=" + std::to_string((unsigned long long)g_media_frame_processed) + "\n";
-    out += "media_ycbcr_hook_installed=" + std::to_string(g_media_ycbcr_hook_installed ? 1 : 0) + "\n";
-    out += "media_ycbcr_calls=" + std::to_string((unsigned long long)g_media_ycbcr_calls) + "\n";
-    out += "media_ycbcr_success=" + std::to_string((unsigned long long)g_media_ycbcr_success) + "\n";
 
     const std::string base = g_app_files_dir + "/danzku_v40_runtime_" + std::to_string((int)getpid());
     // Keep the existing .txt as the latest snapshot.
@@ -1918,7 +1219,6 @@ static void v27_release_resources() {
 }
 
 static bool v27_process_frame(EGLSurface surface) {
-    const bool media_mode_active = g_media_engine_active && media_engine_target_matches();
     ++g_v27_process_calls;
     EGLDisplay dpy = eglGetCurrentDisplay();
     EGLint surface_width = 0, surface_height = 0;
@@ -1930,7 +1230,7 @@ static bool v27_process_frame(EGLSurface surface) {
         surface_width > 0 && surface_height > 0;
     g_v27_last_surface_width = surface_ok ? surface_width : 0;
     g_v27_last_surface_height = surface_ok ? surface_height : 0;
-    if ((!g_v27_enabled_value && !media_mode_active) || !g_v27_initialized ||
+    if (!g_v27_enabled_value || !g_v27_initialized ||
         !g_v27_program || !g_v27_texture || !g_v27_vbo || !g_v27_fbo) {
         ++g_v27_process_skip;
         ++g_v27_skip_not_ready;
@@ -2127,7 +1427,6 @@ static bool v27_process_frame(EGLSurface surface) {
         // texture using its own texel size and the final draw covers the real surface.
         glViewport(0, 0, surface_width, surface_height);
     }
-    const bool media_mode = media_mode_active;
     // Keep the existing valid history texture binding for shader safety, but force
     // temporal contribution to zero in media mode; this avoids changing the proven
     // resource lifecycle while keeping the media profile spatial/lightweight.
@@ -2155,33 +1454,29 @@ static bool v27_process_frame(EGLSurface surface) {
         if (visual_proof_bypass) ++g_v26_visual_proof_bypass_frames;
         else ++g_v26_visual_proof_frames;
     }
-    // Media mode deliberately disables the game/reconstruction feature stack and
-    // uses only the lightweight media profile below. This keeps YouTube separate
     // from the existing game tuning path.
-    const float profile_gate = media_mode ? 0.0f : 1.0f;
-    const float proof_sharpen = (visual_proof_bypass ? 0.0f : g_v27_sharpen_value) * profile_gate;
-    const float proof_clarity = (visual_proof_bypass ? 0.0f : g_v27_clarity_value) * profile_gate;
-    const float proof_temporal = (visual_proof_bypass ? 0.0f : (g_v28_temporal_value ? g_v28_temporal_strength : 0.0f)) * profile_gate;
-    const float proof_motion_aware = (visual_proof_bypass ? 0.0f : (g_v285_motion_aware_value ? 1.0f : 0.0f)) * profile_gate;
-    const float proof_material = (visual_proof_bypass ? 0.0f : g_v291_material_detail_value) * profile_gate;
-    const float proof_local_contrast = (visual_proof_bypass ? 0.0f : g_v291_local_contrast_value) * profile_gate;
-    const float proof_highlight = (visual_proof_bypass ? 0.0f : g_v291_highlight_refine_value) * profile_gate;
-    const float proof_shadow_refine = (visual_proof_bypass ? 0.0f : g_v291_shadow_refine_value) * profile_gate;
-    const float proof_edge_aware = (visual_proof_bypass ? 0.0f : (g_v295_edge_aware_value ? 1.0f : 0.0f)) * profile_gate;
-    const float proof_edge_strength = (visual_proof_bypass ? 0.0f : g_v295_edge_strength_value) * profile_gate;
-    const float proof_recovery = (visual_proof_bypass ? 0.0f : (g_v32_temporal_recovery_value ? 1.0f : 0.0f)) * profile_gate;
-    const float proof_confidence = (visual_proof_bypass ? 0.0f : (g_v33_confidence_value ? 1.0f : 0.0f)) * profile_gate;
-    const float proof_neural = (visual_proof_bypass ? 0.0f : (g_v35_neural_style_value ? 1.0f : 0.0f)) * profile_gate;
-    const float proof_high_end = (visual_proof_bypass ? 0.0f : (g_v40_high_end_value ? 1.0f : 0.0f)) * profile_gate;
-    const float proof_aa = (visual_proof_bypass ? 0.0f : (g_v5_aa_value ? 1.0f : 0.0f)) * profile_gate;
-    const float proof_shadow = (visual_proof_bypass ? 0.0f : g_v5_shadow_value) * profile_gate;
-    const float proof_contact = (visual_proof_bypass ? 0.0f : g_v5_contact_shadow_value) * profile_gate;
-    const float proof_ao = (visual_proof_bypass ? 0.0f : g_v5_ao_value) * profile_gate;
-    const float proof_specular = (visual_proof_bypass ? 0.0f : g_v5_specular_value) * profile_gate;
-    const float proof_reflection = (visual_proof_bypass ? 0.0f : g_v5_reflection_value) * profile_gate;
-    const float proof_lighting = (visual_proof_bypass ? 0.0f : g_v5_lighting_value) * profile_gate;
-    const float proof_effect = (visual_proof_bypass ? 0.0f : g_v5_effect_value) * profile_gate;
-    const float proof_saturation = media_mode ? 1.0f : (visual_proof_bypass ? 1.0f : g_v5_saturation_value);
+    const float proof_sharpen = (visual_proof_bypass ? 0.0f : g_v27_sharpen_value);
+    const float proof_clarity = (visual_proof_bypass ? 0.0f : g_v27_clarity_value);
+    const float proof_temporal = (visual_proof_bypass ? 0.0f : (g_v28_temporal_value ? g_v28_temporal_strength : 0.0f));
+    const float proof_motion_aware = (visual_proof_bypass ? 0.0f : (g_v285_motion_aware_value ? 1.0f : 0.0f));
+    const float proof_material = (visual_proof_bypass ? 0.0f : g_v291_material_detail_value);
+    const float proof_local_contrast = (visual_proof_bypass ? 0.0f : g_v291_local_contrast_value);
+    const float proof_highlight = (visual_proof_bypass ? 0.0f : g_v291_highlight_refine_value);
+    const float proof_shadow_refine = (visual_proof_bypass ? 0.0f : g_v291_shadow_refine_value);
+    const float proof_edge_aware = (visual_proof_bypass ? 0.0f : (g_v295_edge_aware_value ? 1.0f : 0.0f));
+    const float proof_edge_strength = (visual_proof_bypass ? 0.0f : g_v295_edge_strength_value);
+    const float proof_recovery = (visual_proof_bypass ? 0.0f : (g_v32_temporal_recovery_value ? 1.0f : 0.0f));
+    const float proof_confidence = (visual_proof_bypass ? 0.0f : (g_v33_confidence_value ? 1.0f : 0.0f));
+    const float proof_neural = (visual_proof_bypass ? 0.0f : (g_v35_neural_style_value ? 1.0f : 0.0f));
+    const float proof_high_end = (visual_proof_bypass ? 0.0f : (g_v40_high_end_value ? 1.0f : 0.0f));
+    const float proof_aa = (visual_proof_bypass ? 0.0f : (g_v5_aa_value ? 1.0f : 0.0f));
+    const float proof_shadow = (visual_proof_bypass ? 0.0f : g_v5_shadow_value);
+    const float proof_contact = (visual_proof_bypass ? 0.0f : g_v5_contact_shadow_value);
+    const float proof_ao = (visual_proof_bypass ? 0.0f : g_v5_ao_value);
+    const float proof_specular = (visual_proof_bypass ? 0.0f : g_v5_specular_value);
+    const float proof_reflection = (visual_proof_bypass ? 0.0f : g_v5_reflection_value);
+    const float proof_lighting = (visual_proof_bypass ? 0.0f : g_v5_lighting_value);
+    const float proof_effect = (visual_proof_bypass ? 0.0f : g_v5_effect_value);
     glUniform1f(g_v27_sharpen, proof_sharpen);
     glUniform1f(g_v27_clarity, proof_clarity);
     glUniform1f(g_v27_enabled, g_v27_enabled_value ? 1.0f : 0.0f);
@@ -2198,10 +1493,6 @@ static bool v27_process_frame(EGLSurface surface) {
     glUniform1f(g_v295_edge_strength, proof_edge_strength);
     glUniform1f(g_v295_edge_threshold, g_v295_edge_threshold_value);
     glUniform1f(g_v295_edge_softness, g_v295_edge_softness_value);
-    glUniform1f(g_v30_reconstruction, media_mode ? 0.0f : g_v30_reconstruction_value);
-    glUniform1f(g_v31_dynamic_quality, media_mode ? 0.0f : (g_v31_dynamic_quality_value ? 1.0f : 0.0f));
-    glUniform1f(g_v31_quality_min, media_mode ? 1.0f : g_v31_quality_min_value);
-    glUniform1f(g_v31_quality_max, media_mode ? 1.0f : g_v31_quality_max_value);
     glUniform1f(g_v32_temporal_recovery, proof_recovery);
     glUniform1f(g_v32_recovery_strength, g_v32_recovery_strength_value);
     glUniform1f(g_v32_recovery_threshold, g_v32_recovery_threshold_value);
@@ -2225,18 +1516,6 @@ static bool v27_process_frame(EGLSurface surface) {
     glUniform1f(g_v5_lighting, proof_lighting);
     glUniform1f(g_v5_effect, proof_effect);
     glUniform1f(g_v5_saturation, proof_saturation);
-    glUniform1f(g_v6_vibrance, (visual_proof_bypass || media_mode) ? 0.0f : g_v6_vibrance_value);
-    glUniform1f(g_v6_anisotropic, (visual_proof_bypass || media_mode) ? 0.0f : g_v6_anisotropic_value);
-    glUniform1f(g_v6_adaptive_texture, (visual_proof_bypass || media_mode) ? 0.0f : g_v6_adaptive_texture_value);
-    glUniform1f(g_v6_hdr, visual_proof_bypass ? 0.0f : (media_mode ? 0.0f : g_v6_hdr_value));
-    glUniform1f(g_media_mode, media_mode ? 1.0f : 0.0f);
-    glUniform1f(g_media_tone_mapping, media_mode ? g_media_tone_mapping_value : 0.0f);
-    glUniform1f(g_media_highlight_recovery, media_mode ? g_media_highlight_recovery_value : 0.0f);
-    glUniform1f(g_media_shadow_lift, media_mode ? g_media_shadow_lift_value : 0.0f);
-    glUniform1f(g_media_local_contrast, media_mode ? g_media_local_contrast_value : 0.0f);
-    glUniform1f(g_media_vibrance, media_mode ? g_media_vibrance_value : 0.0f);
-    glUniform1f(g_media_adaptive_detail, media_mode ? g_media_adaptive_detail_value : 0.0f);
-    glUniform1f(g_media_skin_protection, media_mode ? g_media_skin_protection_value : 0.0f);
     glBindBuffer(GL_ARRAY_BUFFER, g_v27_vbo);
     glEnableVertexAttribArray((GLuint)g_v27_pos);
     glEnableVertexAttribArray((GLuint)g_v27_uv);
@@ -2381,36 +1660,35 @@ static void append_egl_gl_probe(std::string& out, EGLDisplay dpy, EGLSurface sur
 static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     const bool was_enabled = g_v27_enabled_value;
     const bool config_changed = reload_v27_config_if_changed(false);
-    if (was_enabled && !g_v27_enabled_value && g_v27_initialized) v27_release_resources();
-    if (config_changed) v27_write_runtime_report();
-    if (g_v27_enabled_value) update_fps_telemetry();
-    ++g_hook_calls;
-    if (g_media_engine_active && media_engine_target_matches()) {
-        EGLint w = 0, h = 0;
-        const bool candidate = media_surface_candidate(dpy, surface, &w, &h);
-        if (candidate) {
-            ++g_media_frame_candidates;
-            if (!g_v27_initialized) v27_init((int)w, (int)h, true);
-            if (g_v27_initialized && v27_process_frame(surface)) {
-                ++g_media_frame_processed;
-            }
-        }
-        if (g_orig_eglSwapBuffers) return g_orig_eglSwapBuffers(dpy, surface);
-        return EGL_FALSE;
+
+    if (was_enabled && !g_v27_enabled_value && g_v27_initialized) {
+        v27_release_resources();
     }
-    // Probe only once per process. It observes the current EGL/GL state and does not
-    // modify framebuffer contents, viewport, textures, or swap behavior.
+    if (config_changed) {
+        v27_write_runtime_report();
+    }
+    if (g_v27_enabled_value) {
+        update_fps_telemetry();
+    }
+    ++g_hook_calls;
+
     static volatile bool probe_done = false;
     if (!probe_done) {
         probe_done = true;
+
         std::string report = "stage=v261_probe\n";
         report += "pid=" + std::to_string((int)getpid()) + "\n";
         report += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\n";
         append_egl_gl_probe(report, dpy, surface);
-        if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v261_" + std::to_string((int)getpid()) + ".txt", report);
-        EGLint w=0,h=0;
-        if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE) w=0;
-        if (eglQuerySurface(dpy, surface, EGL_HEIGHT, &h) != EGL_TRUE) h=0;
+        if (g_v27_logging_value) {
+            write_file(g_app_files_dir + "/danzku_v261_" +
+                       std::to_string((int)getpid()) + ".txt", report);
+        }
+
+        EGLint w = 0, h = 0;
+        if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE) w = 0;
+        if (eglQuerySurface(dpy, surface, EGL_HEIGHT, &h) != EGL_TRUE) h = 0;
+
         if (v27_init((int)w, (int)h)) {
             std::string v27 = "stage=v40_init\n";
             v27 += "pid=" + std::to_string((int)getpid()) + "\n";
@@ -2453,25 +1731,31 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
             v27 += "saturation=" + std::to_string(g_v5_saturation_value) + "\n";
             v27 += "width=" + std::to_string((int)w) + "\n";
             v27 += "height=" + std::to_string((int)h) + "\n";
-            v27 += "media_engine=" + std::to_string(g_media_engine_value ? 1 : 0) + "\n";
-            v27 += "media_engine_active=" + std::to_string(g_media_engine_active ? 1 : 0) + "\n";
-            v27 += "media_engine_route=egl_framebuffer_only\n";
-            if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v40_init_" + std::to_string((int)getpid()) + ".txt", v27);
-        } else {
-            if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v40_init_fail_" + std::to_string((int)getpid()) + ".txt",
-                       "stage=v40_init_fail\npid=" + std::to_string((int)getpid()) + "\n");
+            if (g_v27_logging_value) {
+                write_file(g_app_files_dir + "/danzku_v40_init_" +
+                           std::to_string((int)getpid()) + ".txt", v27);
+            }
+        } else if (g_v27_logging_value) {
+            write_file(g_app_files_dir + "/danzku_v40_init_fail_" +
+                       std::to_string((int)getpid()) + ".txt",
+                       "stage=v40_init_fail\npid=" +
+                       std::to_string((int)getpid()) + "\n");
         }
     }
+
     if (g_v27_enabled_value && !g_v27_initialized) {
-        EGLint w=0,h=0;
-        if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE) w=0;
-        if (eglQuerySurface(dpy, surface, EGL_HEIGHT, &h) != EGL_TRUE) h=0;
+        EGLint w = 0, h = 0;
+        if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE) w = 0;
+        if (eglQuerySurface(dpy, surface, EGL_HEIGHT, &h) != EGL_TRUE) h = 0;
         v27_init((int)w, (int)h);
     }
     if (g_v27_initialized && g_v27_enabled_value) {
         v27_process_frame(surface);
     }
-    if (g_orig_eglSwapBuffers) return g_orig_eglSwapBuffers(dpy, surface);
+
+    if (g_orig_eglSwapBuffers) {
+        return g_orig_eglSwapBuffers(dpy, surface);
+    }
     return EGL_FALSE;
 }
 
@@ -2618,139 +1902,6 @@ static int patch_got_callback(struct dl_phdr_info* info, size_t, void* opaque) {
     return 1;
 }
 
-// Read-only diagnostic pass for the media GOT route.
-// IMPORTANT: this function never calls mprotect(), never writes a GOT slot,
-// and never installs a hook. It only observes what dl_iterate_phdr() exposes.
-struct MediaGotDiagContext {
-    const char* path_filter;
-    const char* symbol_name;
-};
-
-static int media_got_diag_callback(struct dl_phdr_info* info, size_t, void* opaque) {
-    auto* ctx = static_cast<MediaGotDiagContext*>(opaque);
-    const char* path = info->dlpi_name;
-    if (!path || !*path) return 0;
-
-    ++g_media_diag_libs_seen;
-
-    const char* slash = strrchr(path, '/');
-    const char* base_name = slash ? slash + 1 : path;
-    const bool is_target_library = (strcmp(base_name, "libandroid_runtime.so") == 0);
-
-    // Record the target library before applying the package path filter so the
-    // diagnostic can distinguish "not visible" from "filtered out".
-    if (is_target_library) {
-        g_media_diag_target_library_seen = 1;
-        g_media_diag_target_path = path;
-    }
-
-    if (ctx->path_filter && !strstr(path, ctx->path_filter)) {
-        ++g_media_diag_path_filter_skipped;
-        if (is_target_library) {
-            g_media_diag_failure = "libandroid_runtime_filtered_by_package_path";
-        }
-        return 0;
-    }
-
-    if (!is_target_library) return 0;
-
-    const ElfW(Phdr)* dynamic_phdr = nullptr;
-    for (size_t i = 0; i < info->dlpi_phnum; ++i) {
-        if (info->dlpi_phdr[i].p_type == PT_DYNAMIC) {
-            dynamic_phdr = &info->dlpi_phdr[i];
-            break;
-        }
-    }
-    if (!dynamic_phdr) {
-        g_media_diag_failure = "libandroid_runtime_dynamic_missing";
-        return 0;
-    }
-    g_media_diag_target_dynamic_seen = 1;
-
-    auto* dyn = reinterpret_cast<const ElfW(Dyn)*>(
-        info->dlpi_addr + dynamic_phdr->p_vaddr);
-
-    const ElfW(Rela)* rela = nullptr;
-    size_t rela_size = 0;
-    const ElfW(Sym)* symtab = nullptr;
-    const char* strtab = nullptr;
-    long plt_rel_type = 0;
-
-    for (const ElfW(Dyn)* d = dyn; d->d_tag != DT_NULL; ++d) {
-        switch (d->d_tag) {
-            case DT_JMPREL:
-                rela = reinterpret_cast<const ElfW(Rela)*>(
-                    info->dlpi_addr + d->d_un.d_ptr);
-                break;
-            case DT_PLTRELSZ:
-                rela_size = static_cast<size_t>(d->d_un.d_val);
-                break;
-            case DT_PLTREL:
-                plt_rel_type = d->d_un.d_val;
-                break;
-            case DT_SYMTAB:
-                symtab = reinterpret_cast<const ElfW(Sym)*>(
-                    info->dlpi_addr + d->d_un.d_ptr);
-                break;
-            case DT_STRTAB:
-                strtab = reinterpret_cast<const char*>(
-                    info->dlpi_addr + d->d_un.d_ptr);
-                break;
-            default:
-                break;
-        }
-    }
-
-    if (rela && rela_size && symtab && strtab && plt_rel_type == DT_RELA) {
-        g_media_diag_target_rela_seen = 1;
-    } else {
-        g_media_diag_failure = "libandroid_runtime_rela_tables_missing";
-        return 0;
-    }
-
-    const size_t count = rela_size / sizeof(ElfW(Rela));
-    for (size_t i = 0; i < count; ++i) {
-        const ElfW(Rela)& r = rela[i];
-        if (ELF64_R_TYPE(r.r_info) != R_AARCH64_JUMP_SLOT) continue;
-
-        const size_t sym_index = ELF64_R_SYM(r.r_info);
-        const char* name = strtab + symtab[sym_index].st_name;
-        if (!name || strcmp(name, ctx->symbol_name) != 0) continue;
-
-        g_media_diag_target_egl_symbol_seen = 1;
-        g_media_diag_target_egl_relocation_found = 1;
-        g_media_diag_failure = "eglSwapBuffers_jump_slot_found";
-        return 0;
-    }
-
-    g_media_diag_failure = "eglSwapBuffers_jump_slot_not_found";
-    return 0;
-}
-
-static void run_media_got_diagnostic(const std::string& package_name) {
-    g_media_diag_libs_seen = 0;
-    g_media_diag_path_filter_skipped = 0;
-    g_media_diag_target_library_seen = 0;
-    g_media_diag_target_dynamic_seen = 0;
-    g_media_diag_target_rela_seen = 0;
-    g_media_diag_target_egl_symbol_seen = 0;
-    g_media_diag_target_egl_relocation_found = 0;
-    g_media_diag_target_path.clear();
-    g_media_diag_failure.clear();
-
-    MediaGotDiagContext ctx{};
-    // The media importer is a system library (libandroid_runtime.so), so the
-    // YouTube package name must NOT be used as a filesystem-path filter.
-    // Keep this diagnostic aligned with the actual media hook candidate.
-    ctx.path_filter = nullptr;
-    ctx.symbol_name = "eglSwapBuffers";
-    dl_iterate_phdr(media_got_diag_callback, &ctx);
-
-    if (g_media_diag_failure.empty()) {
-        g_media_diag_failure = "no_target_library_observed";
-    }
-}
-
 static bool install_manual_got_hook(std::string& detail, void** got_address, void** original, void** value_after_patch) {
     GotPatchContext ctx{};
     ctx.library_name = "libunity.so";
@@ -2797,52 +1948,6 @@ static void emit_aarch64_absolute_jump(uint32_t* dst, void* target) {
     dst[1] = 0xD61F0220u;
     *reinterpret_cast<uint64_t*>(dst + 2) =
         reinterpret_cast<uint64_t>(target);
-}
-
-static bool install_media_ycbcr_hook(std::string& detail, void** got_address,
-                                      void** original, void** value_after_patch) {
-    GotPatchContext ctx{};
-    ctx.library_name = "libcodec2_vndk.so";
-    ctx.path_filter = nullptr;
-    ctx.symbol_name = "_ZN7android19GraphicBufferMapper9lockYCbCrEPK13native_handlejRKNS_4RectEP13android_ycbcr";
-    ctx.replacement = reinterpret_cast<void*>(hooked_lockYCbCr);
-    ctx.original_out = original;
-    dl_iterate_phdr(patch_got_callback, &ctx);
-    if (got_address) *got_address = ctx.found_got;
-    if (value_after_patch) *value_after_patch = ctx.value_after_patch;
-    if (ctx.success) {
-        detail = std::string("media_ycbcr_got_ok:") + (ctx.path ? ctx.path : "(unknown)");
-        return true;
-    }
-    detail = std::string("media_ycbcr_got_no_hook:") + (ctx.error ? ctx.error : "unknown");
-    return false;
-}
-
-static bool install_media_got_hook(std::string& detail, void** got_address,
-                                      void** original, void** value_after_patch,
-                                      const std::string& package_name) {
-    // Media uses only the process-local GOT relocation of the loaded
-    // libandroid_runtime.so importer. We deliberately do not patch the
-    // system libEGL text section or libGLES_mali text. The diagnostic proved
-    // that libandroid_runtime.so imports eglSwapBuffers through a JUMP_SLOT.
-    GotPatchContext ctx{};
-    // YouTube's eglSwapBuffers import was proven to live in
-    // libandroid_runtime.so. It is a system library, so filtering by the
-    // application package path would exclude the exact importer we need.
-    ctx.library_name = "libandroid_runtime.so";
-    ctx.path_filter = nullptr;
-    ctx.symbol_name = "eglSwapBuffers";
-    ctx.replacement = reinterpret_cast<void*>(hooked_eglSwapBuffers);
-    ctx.original_out = original;
-    dl_iterate_phdr(patch_got_callback, &ctx);
-    if (got_address) *got_address = ctx.found_got;
-    if (value_after_patch) *value_after_patch = ctx.value_after_patch;
-    if (ctx.success) {
-        detail = std::string("media_got_ok:") + (ctx.path ? ctx.path : "(unknown)");
-        return true;
-    }
-    detail = std::string("media_got_no_hook:") + (ctx.error ? ctx.error : "unknown");
-    return false;
 }
 
 static void write_hook_report(const char* stage, const std::string& target_name,
@@ -2918,160 +2023,68 @@ public:
     }
 
     static void* hook_worker(void*) {
-        write_media_worker_diag("worker_start", 0, "pthread_worker_entered");
         for (int attempt = 1; attempt <= 12; ++attempt) {
             usleep(500000);
-            bool unity = maps_has("libunity.so");
-            const bool media_target =
-                g_media_engine_value && !g_media_target_package.empty() &&
-                base_package_name(g_target_name) == g_media_target_package;
-
-            char gate_detail[256] = {};
-            snprintf(gate_detail, sizeof(gate_detail),
-                     "unity=%d media_target=%d",
-                     unity ? 1 : 0, media_target ? 1 : 0);
-            write_media_worker_diag("attempt_gate", attempt, gate_detail);
-
-            if (!unity && !media_target) {
-                write_media_worker_diag("attempt_skipped", attempt, "target_gate_not_ready");
-                continue;
-            }
+            if (!maps_has("libunity.so")) continue;
 
             void* handle = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
             void* resolved = handle ? dlsym(handle, "eglSwapBuffers") : nullptr;
             if (handle) dlclose(handle);
             if (!resolved) {
-                write_media_worker_diag("egl_resolve_fail", attempt, "dlsym_eglSwapBuffers_failed");
-                write_hook_report("resolve_fail", g_target_name, "dlsym_failed", resolved, nullptr);
-                write_media_worker_diag("worker_exit", attempt, "resolve_failed");
+                write_hook_report("resolve_fail", g_target_name,
+                                  "dlsym_failed", resolved, nullptr);
                 return nullptr;
             }
-            write_media_worker_diag("egl_resolve_ok", attempt, "dlsym_eglSwapBuffers_ok");
 
             std::string detail;
             void* got = nullptr;
-            g_orig_eglSwapBuffers = nullptr;
             void* got_after = nullptr;
-            g_media_engine_active = false;
-            const std::string package_name = base_package_name(g_target_name);
-            const bool media_engine_target = g_media_engine_value && !g_media_target_package.empty() && package_name == g_media_target_package;
-            if (media_engine_target) {
-                g_media_codec2_present = maps_has("libcodec2_vndk.so");
-                g_media_bufferqueue_present =
-                    maps_has("android.hardware.graphics.bufferqueue@2.0.so") ||
-                    maps_has("android.hardware.graphics.bufferqueue@1.0.so");
-                char media_gate[256] = {};
-                snprintf(media_gate, sizeof(media_gate),
-                         "codec2=%d bufferqueue=%d require_codec2=%d",
-                         g_media_codec2_present ? 1 : 0,
-                         g_media_bufferqueue_present ? 1 : 0,
-                         g_media_require_codec2 ? 1 : 0);
-                write_media_worker_diag("media_identity_gate", attempt, media_gate);
-            }
-            if (!unity && media_engine_target) {
-                // Direct Codec2 YUV experiment: hook the libcodec2_vndk.so GOT
-                // entry for GraphicBufferMapper::lockYCbCr. The original call
-                // always runs first; this POC only records the returned Y/Cb/Cr
-                // mapping and does not modify frame bytes.
-                std::string ycbcr_detail;
-                void* ycbcr_got = nullptr;
-                void* ycbcr_after = nullptr;
-                g_orig_lockYCbCr = nullptr;
-                const bool ycbcr_ok = install_media_ycbcr_hook(
-                    ycbcr_detail, &ycbcr_got,
-                    reinterpret_cast<void**>(&g_orig_lockYCbCr), &ycbcr_after);
-                g_media_ycbcr_hook_installed = ycbcr_ok && g_orig_lockYCbCr != nullptr;
-                char ycbcr_result[768] = {};
-                snprintf(ycbcr_result, sizeof(ycbcr_result),
-                         "ok=%d orig=%s detail=%s got=%s got_after=%s",
-                         ycbcr_ok ? 1 : 0,
-                         g_orig_lockYCbCr ? "YES" : "NO",
-                         ycbcr_detail.c_str(), hex_ptr(ycbcr_got).c_str(),
-                         hex_ptr(ycbcr_after).c_str());
-                write_media_worker_diag(ycbcr_ok ? "ycbcr_install_ok" : "ycbcr_install_fail",
-                                        attempt, ycbcr_result);
-                if (ycbcr_ok) {
-                    write_hook_report("media_ycbcr_install", g_target_name,
-                                      ycbcr_detail.c_str(), nullptr, ycbcr_got,
-                                      reinterpret_cast<void*>(g_orig_lockYCbCr), ycbcr_after);
-                    // This media POC does not depend on the unrelated EGL hook.
-                    // Wait for playback to exercise lockYCbCr, then exit.
-                    g_media_engine_active = true;
-                    write_media_worker_diag("worker_exit", attempt,
-                                            "ycbcr_hook_installed_waiting_for_playback");
-                    return nullptr;
-                }
-            }
-
-            if (!unity && media_engine_target) {
-                // The diagnostic phase has now proven that libandroid_runtime.so
-                // exposes an eglSwapBuffers JUMP_SLOT. Keep the read-only
-                // diagnostic for telemetry, then proceed to the existing GOT
-                // installer. No new hook mechanism is introduced here.
-                run_media_got_diagnostic(package_name);
-                char diag_detail[512] = {};
-                snprintf(diag_detail, sizeof(diag_detail),
-                         "libs=%llu filter_skipped=%llu target_seen=%d target_path=%s dynamic=%d rela=%d egl_symbol=%d egl_relocation=%d reason=%s",
-                         (unsigned long long)g_media_diag_libs_seen,
-                         (unsigned long long)g_media_diag_path_filter_skipped,
-                         g_media_diag_target_library_seen ? 1 : 0,
-                         g_media_diag_target_path.empty() ? "(none)" : g_media_diag_target_path.c_str(),
-                         g_media_diag_target_dynamic_seen ? 1 : 0,
-                         g_media_diag_target_rela_seen ? 1 : 0,
-                         g_media_diag_target_egl_symbol_seen ? 1 : 0,
-                         g_media_diag_target_egl_relocation_found ? 1 : 0,
-                         g_media_diag_failure.empty() ? "(none)" : g_media_diag_failure.c_str());
-                write_media_worker_diag("got_diagnostic", attempt, diag_detail);
-            }
-
-            write_media_worker_diag("got_install_start", attempt, unity ? "game_path" : "media_path");
-            bool ok = unity
-                ? install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after)
-                : install_media_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after, package_name);
+            g_orig_eglSwapBuffers = nullptr;
+            const bool ok = install_manual_got_hook(
+                detail, &got,
+                reinterpret_cast<void**>(&g_orig_eglSwapBuffers),
+                &got_after);
             g_hook_installed = ok && g_orig_eglSwapBuffers != nullptr;
-            g_media_engine_active = ok && !unity && media_engine_target;
-            {
-                char result[512] = {};
-                snprintf(result, sizeof(result),
-                         "ok=%d orig=%s detail=%s",
-                         ok ? 1 : 0,
-                         g_orig_eglSwapBuffers ? "YES" : "NO",
-                         detail.c_str());
-                write_media_worker_diag(ok ? "got_install_ok" : "got_install_fail",
-                                        attempt, result);
-            }
+
             if (ok) {
-                write_hook_report(unity ? "install" : "media_install",
-                                  g_target_name, detail.c_str(), resolved, got,
-                                  reinterpret_cast<void*>(g_orig_eglSwapBuffers), got_after);
-                // Keep the process untouched otherwise; periodically verify that the
-                // GOT slot still points at our replacement and record the callback count.
+                write_hook_report("install", g_target_name, detail.c_str(),
+                                  resolved, got,
+                                  reinterpret_cast<void*>(g_orig_eglSwapBuffers),
+                                  got_after);
                 for (int verify = 1; verify <= 6; ++verify) {
                     sleep(1);
                     void* current = got ? *reinterpret_cast<void**>(got) : nullptr;
                     char path[512] = {};
-                    snprintf(path, sizeof(path), "%s/danzku_v257_verify_%d_%d.txt", g_app_files_dir.c_str(), verify, (int)getpid());
+                    snprintf(path, sizeof(path),
+                             "%s/danzku_v257_verify_%d_%d.txt",
+                             g_app_files_dir.c_str(), verify, (int)getpid());
                     char out[2048] = {};
                     snprintf(out, sizeof(out),
-                        "stage=verify\nattempt=%d\npid=%d\ngot_address=%s\nhook_address=%s\ngot_value=%s\ngot_matches_hook=%s\nhook_calls=%llu\n",
-                        verify, (int)getpid(), hex_ptr(got).c_str(),
-                        hex_ptr(reinterpret_cast<void*>(hooked_eglSwapBuffers)).c_str(),
-                        hex_ptr(current).c_str(),
-                        current == reinterpret_cast<void*>(hooked_eglSwapBuffers) ? "YES" : "NO",
-                        (unsigned long long)g_hook_calls);
+                             "stage=verify\nattempt=%d\npid=%d\n"
+                             "got_address=%s\nhook_address=%s\n"
+                             "got_value=%s\ngot_matches_hook=%s\n"
+                             "hook_calls=%llu\n",
+                             verify, (int)getpid(),
+                             hex_ptr(got).c_str(),
+                             hex_ptr(reinterpret_cast<void*>(hooked_eglSwapBuffers)).c_str(),
+                             hex_ptr(current).c_str(),
+                             current == reinterpret_cast<void*>(hooked_eglSwapBuffers) ? "YES" : "NO",
+                             (unsigned long long)g_hook_calls);
                     if (g_v27_logging_value) write_file(path, out);
                 }
-                write_media_worker_diag("worker_exit", attempt, "hook_installed");
                 return nullptr;
             }
+
             if (attempt == 12) {
-                write_hook_report("install_fail", g_target_name, detail.c_str(), resolved, got, reinterpret_cast<void*>(g_orig_eglSwapBuffers), got_after);
-                write_media_worker_diag("worker_exit", attempt, "install_failed_after_12_attempts");
+                write_hook_report("install_fail", g_target_name, detail.c_str(),
+                                  resolved, got,
+                                  reinterpret_cast<void*>(g_orig_eglSwapBuffers),
+                                  got_after);
             }
         }
-        write_media_worker_diag("worker_exit", 12, "loop_finished_without_hook");
         return nullptr;
     }
+
 private:
     JNIEnv* env_() { return g_env; }
 };

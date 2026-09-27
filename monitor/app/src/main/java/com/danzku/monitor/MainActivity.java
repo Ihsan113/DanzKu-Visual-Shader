@@ -42,10 +42,6 @@ public class MainActivity extends Activity {
     Button overlayPermissionButton, overlayButton;
     Handler handler = new Handler();
     final String CONF = "/data/adb/modules/danzku_visual_shader/config/visual.conf";
-    final String MEDIA_CONF = "/data/adb/modules/danzku_visual_shader/config/media.conf";
-    // Native Media Engine falls back to this path when the app's namespace
-    // cannot read /data/adb directly. Every APK media edit mirrors the file here. 
-    final String MEDIA_CONFIG_FALLBACK = "/data/local/tmp/danzku_media_config";
     final String CONTROL = "/data/local/tmp/danzku_visual_engine";
     final String CONFIG_BRIDGE = "/data/local/tmp/danzku_visual_config";
     final String TARGETS = "/data/adb/modules/danzku_visual_shader/config/targets.conf";
@@ -66,9 +62,7 @@ public class MainActivity extends Activity {
     SeekBar saturationSeekBar;
     TextView saturationValueLabel;
     SeekBar vibranceSeekBar, anisotropicSeekBar, adaptiveTextureSeekBar, hdrSeekBar;
-    SeekBar mediaToneMappingSeekBar, mediaHighlightSeekBar, mediaShadowSeekBar, mediaLocalSeekBar, mediaVibranceSeekBar, mediaDetailSeekBar, mediaSkinSeekBar;
     TextView vibranceValueLabel, anisotropicValueLabel, adaptiveTextureValueLabel, hdrValueLabel;
-    TextView mediaToneMappingValueLabel, mediaHighlightValueLabel, mediaShadowValueLabel, mediaLocalValueLabel, mediaVibranceValueLabel, mediaDetailValueLabel, mediaSkinValueLabel;
 
 
     RenderStats parseRenderStats(String report) {
@@ -120,7 +114,6 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("danzku_monitor", MODE_PRIVATE);
         initDefaultStrengths();
         syncNativeControlFromConfig();
-        syncMediaConfigFallback();
         buildUi();
         refresh();
         handler.postDelayed(new Runnable() {
@@ -173,15 +166,6 @@ public class MainActivity extends Activity {
         defaultStrengths.put("logging", "1");
         defaultStrengths.put("ram_optimization", "1");
         defaultStrengths.put("fps_boost", "1");
-        defaultStrengths.put("media_engine", "0");
-        defaultStrengths.put("media_target_package", "com.google.android.youtube");
-        defaultStrengths.put("media_tone_mapping", "0.22");
-        defaultStrengths.put("media_highlight_recovery", "0.18");
-        defaultStrengths.put("media_shadow_lift", "0.12");
-        defaultStrengths.put("media_local_contrast", "0.10");
-        defaultStrengths.put("media_vibrance", "0.12");
-        defaultStrengths.put("media_adaptive_detail", "0.08");
-        defaultStrengths.put("media_skin_protection", "0.75");
     }
 
     int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
@@ -201,27 +185,16 @@ public class MainActivity extends Activity {
         status = tv("Loading...");
         root.addView(status);
 
-        LinearLayout nav = new LinearLayout(this);
-        nav.setOrientation(LinearLayout.HORIZONTAL);
-        Button gameTab = new Button(this);
-        gameTab.setText("GAME");
-        Button mediaTab = new Button(this);
-        mediaTab.setText("MEDIA / YOUTUBE");
-        nav.addView(gameTab, new LinearLayout.LayoutParams(0, dp(56), 1f));
-        nav.addView(mediaTab, new LinearLayout.LayoutParams(0, dp(56), 1f));
-        root.addView(nav);
-
-        FrameLayout pages = new FrameLayout(this);
         LinearLayout gamePage = new LinearLayout(this);
         gamePage.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout mediaPage = new LinearLayout(this);
-        mediaPage.setOrientation(LinearLayout.VERTICAL);
-        pages.addView(gamePage, new FrameLayout.LayoutParams(-1, -2));
-        pages.addView(mediaPage, new FrameLayout.LayoutParams(-1, -2));
-        root.addView(pages);
-
+        root.addView(gamePage);
         activePage = gamePage;
         addMasterSwitch();
+
+        TextView quickHint = tv("Quick Settings: tambahkan tile “Visual Game” dari Edit/Pensil panel notifikasi untuk ON/OFF cepat.");
+        quickHint.setTextSize(12);
+        quickHint.setPadding(dp(20), dp(4), dp(20), dp(8));
+        root.addView(quickHint);
 
         Button targets = new Button(this);
         targets.setText("TARGET APPS / PACKAGE LIST");
@@ -279,35 +252,7 @@ public class MainActivity extends Activity {
         refresh.setOnClickListener(v -> refresh());
         activePage.addView(refresh);
 
-        activePage = mediaPage;
-        TextView mediaInfo = tv("MEDIA ENGINE — YouTube\nHDR10+-like visual enhancement; bukan HDR10+ metadata asli.");
-        mediaPage.addView(mediaInfo);
-        addToggle("Media Engine (YouTube)", "media_engine");
-        addFloatControl("Media Tone Mapping", "media_tone_mapping", 0.0f, 1.0f, 0.22f, "mediaToneMappingSeekBar", "mediaToneMappingValueLabel", "0.00");
-        addFloatControl("Media Highlight Recovery", "media_highlight_recovery", 0.0f, 1.0f, 0.18f, "mediaHighlightSeekBar", "mediaHighlightValueLabel", "0.00");
-        addFloatControl("Media Shadow Lift", "media_shadow_lift", 0.0f, 1.0f, 0.12f, "mediaShadowSeekBar", "mediaShadowValueLabel", "0.00");
-        addFloatControl("Media Local Contrast", "media_local_contrast", 0.0f, 1.0f, 0.10f, "mediaLocalSeekBar", "mediaLocalValueLabel", "0.00");
-        addFloatControl("Media Vibrance", "media_vibrance", 0.0f, 1.0f, 0.12f, "mediaVibranceSeekBar", "mediaVibranceValueLabel", "0.00");
-        addFloatControl("Media Adaptive Detail", "media_adaptive_detail", 0.0f, 1.0f, 0.08f, "mediaDetailSeekBar", "mediaDetailValueLabel", "0.00");
-        addFloatControl("Media Skin Protection", "media_skin_protection", 0.0f, 1.0f, 0.75f, "mediaSkinSeekBar", "mediaSkinValueLabel", "0.00");
-
-        Button mediaConfig = new Button(this);
-        mediaConfig.setText("EDIT MEDIA CONFIG");
-        mediaConfig.setMinHeight(dp(60));
-        mediaConfig.setOnClickListener(v -> showMediaConfigEditor());
-        mediaPage.addView(mediaConfig);
-
-        gameTab.setOnClickListener(v -> {
-            gamePage.setVisibility(View.VISIBLE);
-            mediaPage.setVisibility(View.GONE);
-        });
-        mediaTab.setOnClickListener(v -> {
-            gamePage.setVisibility(View.GONE);
-            mediaPage.setVisibility(View.VISIBLE);
-        });
-        mediaPage.setVisibility(View.GONE);
         activePage = gamePage;
-
         sv.addView(root);
         setContentView(sv);
     }
@@ -584,13 +529,6 @@ public class MainActivity extends Activity {
         else if ("anisotropicSeekBar".equals(barField)) { anisotropicSeekBar=bar; anisotropicValueLabel=valueLabel; }
         else if ("adaptiveTextureSeekBar".equals(barField)) { adaptiveTextureSeekBar=bar; adaptiveTextureValueLabel=valueLabel; }
         else if ("hdrSeekBar".equals(barField)) { hdrSeekBar=bar; hdrValueLabel=valueLabel; }
-        else if ("mediaToneMappingSeekBar".equals(barField)) { mediaToneMappingSeekBar=bar; mediaToneMappingValueLabel=valueLabel; }
-        else if ("mediaHighlightSeekBar".equals(barField)) { mediaHighlightSeekBar=bar; mediaHighlightValueLabel=valueLabel; }
-        else if ("mediaShadowSeekBar".equals(barField)) { mediaShadowSeekBar=bar; mediaShadowValueLabel=valueLabel; }
-        else if ("mediaLocalSeekBar".equals(barField)) { mediaLocalSeekBar=bar; mediaLocalValueLabel=valueLabel; }
-        else if ("mediaVibranceSeekBar".equals(barField)) { mediaVibranceSeekBar=bar; mediaVibranceValueLabel=valueLabel; }
-        else if ("mediaDetailSeekBar".equals(barField)) { mediaDetailSeekBar=bar; mediaDetailValueLabel=valueLabel; }
-        else if ("mediaSkinSeekBar".equals(barField)) { mediaSkinSeekBar=bar; mediaSkinValueLabel=valueLabel; }
     }
 
     void syncFloatControl(String config, String key, SeekBar bar, TextView label, float min, float max, float def, String format) {
@@ -615,9 +553,7 @@ public class MainActivity extends Activity {
                 ioExecutor.execute(() -> { writeConfigValue(key, String.format(Locale.US, format, v)); syncNativeControlFromConfigNow(); });
             }
         });
-        String enabled = isMediaKey(key)
-                ? configValueFromText(config, "media_engine")
-                : configValueFromText(config, "enabled");
+        String enabled = configValueFromText(config, "enabled");
         boolean on = isFeatureOn(enabled == null ? "1" : enabled);
         bar.setEnabled(on);
         bar.setAlpha(on ? 1f : 0.45f);
@@ -738,207 +674,6 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> Toast.makeText(this, "Gagal encode config: " + e, Toast.LENGTH_LONG).show());
             }
         });
-    }
-
-    void showMediaConfigEditor() {
-        final EditText editor = new EditText(this);
-        editor.setGravity(Gravity.TOP | Gravity.START);
-        editor.setTextSize(13);
-        editor.setTypeface(Typeface.MONOSPACE);
-        editor.setSingleLine(false);
-        editor.setHorizontallyScrolling(false);
-        editor.setMinLines(14);
-        editor.setText(su("cat \"" + MEDIA_CONF + "\" 2>/dev/null"));
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("DANZKU MEDIA / YOUTUBE CONFIG")
-                .setMessage("Config media terpisah dari GAME. Gunakan format key=value.")
-                .setView(editor)
-                .setNegativeButton("TUTUP", null)
-                .setPositiveButton("SIMPAN & TERAPKAN", null)
-                .create();
-        dialog.setOnShowListener(d -> {
-            Button save = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            save.setOnClickListener(v -> {
-                saveMediaConfig(editor.getText().toString(), true);
-                dialog.dismiss();
-            });
-        });
-        dialog.show();
-    }
-
-    void saveMediaConfig(String text, boolean showToast) {
-        if (text == null || text.trim().length() == 0) return;
-        ioExecutor.execute(() -> {
-            try {
-                String encoded = Base64.encodeToString(text.getBytes("UTF-8"), Base64.NO_WRAP);
-                String cmd = "echo '" + encoded + "' | toybox base64 -d > \"" + MEDIA_CONF + ".tmp\" && " +
-                        "chmod 0644 \"" + MEDIA_CONF + ".tmp\" && mv \"" + MEDIA_CONF + ".tmp\" \"" + MEDIA_CONF + "\"";
-                String result = su(cmd);
-                syncMediaConfigFallback();
-                runOnUiThread(() -> {
-                    if (showToast) {
-                        Toast.makeText(this, result.startsWith("ERROR:")
-                                ? "Gagal simpan media config" : "Media config tersimpan & diterapkan",
-                                Toast.LENGTH_SHORT).show();
-                    }
-                    syncNativeControlFromConfig();
-                    refresh();
-                });
-            } catch (Exception ignored) {}
-        });
-    }
-
-    void addMasterSwitch() {
-        Switch sw = new Switch(this);
-        sw.setText("Visual Engine");
-        sw.setTextSize(16);
-        sw.setTag("enabled");
-        sw.setPadding(20,16,20,16);
-        sw.setMinHeight(dp(60));
-        sw.setOnCheckedChangeListener((button, checked) -> {
-            if (button.isPressed()) setFeatureKey("enabled", checked);
-        });
-        featureSwitches.add(sw);
-        activePage.addView(sw);
-    }
-
-    void addToggle(String label, String key) {
-        Switch sw = new Switch(this);
-        sw.setText(label);
-        sw.setTextSize(15);
-        sw.setPadding(20,16,20,16);
-        sw.setMinHeight(dp(60));
-        sw.setTag(key);
-        sw.setOnCheckedChangeListener((button, checked) -> {
-            if (button.isPressed()) setFeatureKey(key, checked);
-        });
-        featureSwitches.add(sw);
-        activePage.addView(sw);
-    }
-
-    static class SuResult {
-        String output = "";
-        int exitCode = -1;
-        boolean timedOut = false;
-        String error = "";
-    }
-
-    SuResult runSu(String command) {
-        // KernelSU/Magisk can expose a different mount namespace to an app.
-        // The previous 5.2.12 build tried plain `su -c` first and treated an
-        // empty-but-successful result as valid, so /data/user/0/... could be
-        // invisible even though root itself was OK. Use mount-master first,
-        // matching the known-good 5.2.11 path, then fall back to normal su only
-        // when the master shell actually fails.
-        SuResult master = runSuProcess(new String[]{"su", "-mm", "-c", command});
-        if (master.error.length() == 0 && !master.timedOut && master.exitCode == 0) {
-            return master;
-        }
-
-        SuResult normal = runSuProcess(new String[]{"su", "-c", command});
-        if (normal.error.length() == 0 && !normal.timedOut) {
-            return normal;
-        }
-
-        return master.output.length() > 0 ? master : normal;
-    }
-
-    SuResult runSuProcess(String[] argv) {
-        SuResult r = new SuResult();
-        Process p = null;
-        try {
-            p = new ProcessBuilder(argv).redirectErrorStream(true).start();
-            final Process fp = p;
-            final ByteArrayOutputStream out = new ByteArrayOutputStream();
-            Thread reader = new Thread(() -> {
-                try {
-                    InputStream in = fp.getInputStream();
-                    byte[] buf = new byte[4096]; int n;
-                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                } catch (Exception ignored) {}
-            }, "danzku-su-reader");
-            reader.start();
-
-            boolean finished = p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS);
-            if (!finished) {
-                r.timedOut = true;
-                p.destroyForcibly();
-            }
-            try { reader.join(500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-            r.exitCode = finished ? p.exitValue() : -1;
-            r.output = out.toString().trim();
-        } catch(Exception e) {
-            r.error = e.toString();
-            if (p != null) p.destroyForcibly();
-        }
-        return r;
-    }
-
-    String su(String command) {
-        SuResult r = runSu(command);
-        if (r.error.length() > 0) return "ERROR: " + r.error;
-        if (r.timedOut) return "ERROR: su timeout";
-        return r.output;
-    }
-
-    boolean isMediaKey(String key) {
-        return key != null && key.startsWith("media_");
-    }
-
-    String configTextForKey(String key) {
-        return su("cat \"" + (isMediaKey(key) ? MEDIA_CONF : CONF) + "\" 2>/dev/null");
-    }
-
-    String configValueForKey(String key) {
-        return configValueFromText(configTextForKey(key), key);
-    }
-
-    void setFeatureKey(String key, boolean on) {
-        // Media Engine is stored independently from the game config. In
-        // particular, it never restores a saved game strength value.
-        ioExecutor.execute(() -> {
-            String current = configValueForKey(key);
-            if (on) {
-                String restore = isMediaKey(key) ? defaultStrengths.get(key)
-                        : prefs.getString("saved_" + key, "");
-                if (restore == null || restore.length() == 0 || "0".equals(restore)) {
-                    restore = defaultStrengths.get(key);
-                }
-                if (restore == null || restore.length() == 0 || "0".equals(restore)) restore = "1";
-                writeConfigValue(key, restore);
-            } else {
-                if (!isMediaKey(key) && current != null && current.length() > 0 && !"0".equals(current)) {
-                    prefs.edit().putString("saved_" + key, current).apply();
-                }
-                writeConfigValue(key, "0");
-            }
-            syncNativeControlFromConfigNow();
-            String result = buildStatusText();
-            runOnUiThread(() -> status.setText(result));
-        });
-    }
-
-    void writeConfigValue(String key, String value) {
-        String safeKey = key.replaceAll("[^a-zA-Z0-9_]", "");
-        String safeValue = value.replaceAll("[^0-9.\\-]", "");
-        String file = isMediaKey(key) ? MEDIA_CONF : CONF;
-        String cmd = "F=\"" + file + "\"; T=${F}.tmp; " +
-                "if grep -q '^" + safeKey + "=' \"$F\" 2>/dev/null; then " +
-                "sed 's/^" + safeKey + "=.*/" + safeKey + "=" + safeValue + "/' \"$F\" > \"$T\"; " +
-                "else cat \"$F\" > \"$T\" 2>/dev/null; printf '%s\\n' '" + safeKey + "=" + safeValue + "' >> \"$T\"; fi; " +
-                "chmod 0644 \"$T\" && mv \"$T\" \"$F\"";
-        su(cmd);
-        if (isMediaKey(key)) syncMediaConfigFallback();
-    }
-
-    void syncMediaConfigFallback() {
-        String cmd = "if [ -r \"" + MEDIA_CONF + "\" ]; then " +
-                "cp \"" + MEDIA_CONF + "\" \"" + MEDIA_CONFIG_FALLBACK + ".tmp\" 2>/dev/null && " +
-                "chmod 0644 \"" + MEDIA_CONFIG_FALLBACK + ".tmp\" && " +
-                "mv \"" + MEDIA_CONFIG_FALLBACK + ".tmp\" \"" + MEDIA_CONFIG_FALLBACK + "\"; " +
-                "fi";
-        su(cmd);
     }
 
     void syncNativeControlFromConfig() {
@@ -1085,7 +820,6 @@ public class MainActivity extends Activity {
         if (!rootCheck.startsWith("uid=0")) return "DANZKU MONITOR V5.2.26\nROOT: FAILED\n" + rootCheck;
         RuntimeState st = readRuntime();
         String config = configText();
-        String mediaConfig = su("cat \"" + MEDIA_CONF + "\" 2>/dev/null");
         String uiConfig = config + "\n" + mediaConfig;
         HashSet<String> targets = readTargetPackages();
         if (st.ready) {
@@ -1196,41 +930,30 @@ public class MainActivity extends Activity {
     void syncSwitches(String report, String config) {
         boolean masterOn = isFeatureOn(configValueFromText(config, "enabled"));
         for (Switch sw : featureSwitches) {
-            String key=(String)sw.getTag();
-            String val=configValueFromText(config,key);
-            if(val==null) val=value(report,key);
-            if(val==null) {
+            String key = (String) sw.getTag();
+            String val = configValueFromText(config, key);
+            if (val == null) val = value(report, key);
+            if (val == null) {
                 sw.setEnabled(false);
                 sw.setAlpha(0.55f);
-            } else {
-                boolean mediaControl = isMediaKey(key);
-                boolean masterControl = "enabled".equals(key) || "media_engine".equals(key);
-                boolean keepUsableWhenMasterOff = "logging".equals(key);
-                boolean controllingOn = mediaControl
-                        ? isFeatureOn(configValueFromText(config, "media_engine"))
-                        : masterOn;
-                boolean visuallyOff = !controllingOn && !masterControl && !keepUsableWhenMasterOff;
-                sw.setEnabled(!visuallyOff);
-                sw.setAlpha(visuallyOff ? 0.45f : 1f);
-                sw.setOnCheckedChangeListener(null);
-                sw.setChecked(visuallyOff ? false : isFeatureOn(val));
-                sw.setOnCheckedChangeListener((button, checked) -> {
-                    if (button.isPressed()) setFeatureKey(key, checked);
-                });
+                continue;
             }
+            boolean masterControl = "enabled".equals(key);
+            boolean keepUsableWhenMasterOff = "logging".equals(key);
+            boolean visuallyOff = !masterOn && !masterControl && !keepUsableWhenMasterOff;
+            sw.setEnabled(!visuallyOff);
+            sw.setAlpha(visuallyOff ? 0.45f : 1f);
+            sw.setOnCheckedChangeListener(null);
+            sw.setChecked(visuallyOff ? false : isFeatureOn(val));
+            sw.setOnCheckedChangeListener((button, checked) -> {
+                if (button.isPressed()) setFeatureKey(key, checked);
+            });
         }
         syncSaturationControl(config);
         syncFloatControl(config, "vibrance", vibranceSeekBar, vibranceValueLabel, 0.0f, 1.0f, 0.20f, "%.2f");
         syncFloatControl(config, "anisotropic_enhancement", anisotropicSeekBar, anisotropicValueLabel, 0.0f, 16.0f, 0.0f, "%.1f");
         syncFloatControl(config, "adaptive_texture_enhancement", adaptiveTextureSeekBar, adaptiveTextureValueLabel, 0.0f, 0.50f, 0.15f, "%.2f");
         syncFloatControl(config, "hdr_enhancement", hdrSeekBar, hdrValueLabel, 0.0f, 1.0f, 0.10f, "%.2f");
-        syncFloatControl(config, "media_tone_mapping", mediaToneMappingSeekBar, mediaToneMappingValueLabel, 0.0f, 1.0f, 0.22f, "%.2f");
-        syncFloatControl(config, "media_highlight_recovery", mediaHighlightSeekBar, mediaHighlightValueLabel, 0.0f, 1.0f, 0.18f, "%.2f");
-        syncFloatControl(config, "media_shadow_lift", mediaShadowSeekBar, mediaShadowValueLabel, 0.0f, 1.0f, 0.12f, "%.2f");
-        syncFloatControl(config, "media_local_contrast", mediaLocalSeekBar, mediaLocalValueLabel, 0.0f, 1.0f, 0.10f, "%.2f");
-        syncFloatControl(config, "media_vibrance", mediaVibranceSeekBar, mediaVibranceValueLabel, 0.0f, 1.0f, 0.12f, "%.2f");
-        syncFloatControl(config, "media_adaptive_detail", mediaDetailSeekBar, mediaDetailValueLabel, 0.0f, 1.0f, 0.08f, "%.2f");
-        syncFloatControl(config, "media_skin_protection", mediaSkinSeekBar, mediaSkinValueLabel, 0.0f, 1.0f, 0.75f, "%.2f");
     }
 
     void updateOverlayPermissionUi() {

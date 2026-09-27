@@ -70,16 +70,16 @@ public class VisualEngineTileService extends TileService {
         String cmd =
                 "set -e; " +
                 "F='" + CONF + "'; C='" + CONTROL + "'; B='" + BRIDGE + "'; V='" + value + "'; " +
-                "D=$(dirname "$F"); mkdir -p "$D"; " +
-                "if [ -f "$F" ]; then " +
-                "if grep -q '^enabled=' "$F"; then " +
-                "sed "s/^enabled=.*/enabled=$V/" "$F" > "$F.tmp"; " +
-                "else { cat "$F"; printf '\nenabled=%s\n' "$V"; } > "$F.tmp"; fi; " +
-                "chmod 0644 "$F.tmp"; mv "$F.tmp" "$F"; " +
+                "D=\$(dirname \"\$F\"); mkdir -p \"\$D\"; " +
+                "if [ -f \"\$F\" ]; then " +
+                "if grep -q '^enabled=' \"\$F\"; then " +
+                "sed \"s/^enabled=.*/enabled=\$V/\" \"\$F\" > \"\$F.tmp\"; " +
+                "else { cat \"\$F\"; printf '\\nenabled=%s\\n' \"\$V\"; } > \"\$F.tmp\"; fi; " +
+                "chmod 0644 \"\$F.tmp\"; mv \"\$F.tmp\" \"\$F\"; " +
                 "fi; " +
-                "printf '%s\n' "$V" > "$C.tmp"; chmod 0644 "$C.tmp"; mv "$C.tmp" "$C"; " +
-                "if [ -r "$F" ]; then " +
-                "cp "$F" "$B.tmp"; chmod 0644 "$B.tmp"; mv "$B.tmp" "$B"; fi";
+                "printf '%s\\n' \"\$V\" > \"\$C.tmp\"; chmod 0644 \"\$C.tmp\"; mv \"\$C.tmp\" \"\$C\"; " +
+                "if [ -r \"\$F\" ]; then " +
+                "cp \"\$F\" \"\$B.tmp\"; chmod 0644 \"\$B.tmp\"; mv \"\$B.tmp\" \"\$B\"; fi";
         RootResult result = runRoot(cmd);
         return result.ok;
     }

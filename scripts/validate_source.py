@@ -35,6 +35,7 @@ required = [
     'g_v33_confidence', 'g_v35_neural_style', 'g_v40_high_end',
     'uConfidence', 'uNeuralStyle', 'uHighEnd',
     'reconstruction_confidence', 'neural_style_reconstruction', 'high_end_reconstruction',
+    'g_ai_reconstruction', 'uAIReconstruction', 'ai_reconstruction',
     'danzku_v40_runtime_', 'danzku_v40_init_', 'advanced_aa', 'uAdvancedAA',
 ]
 for token in required:
@@ -61,6 +62,13 @@ for u in ['uConfidence','uConfidenceStrength','uConfidenceThreshold','uConfidenc
 for g in ['g_v33_confidence','g_v33_confidence_strength','g_v33_confidence_threshold','g_v33_confidence_softness',
           'g_v35_neural_style','g_v35_neural_strength','g_v35_structure_strength',
           'g_v40_high_end','g_v40_high_end_strength']:
+    if src.count(f'static GLint {g} = -1;') != 1:
+        errors.append(f'{g}: declaration count invalid')
+    if src.count(f'glUniform1f({g},') != 1:
+        errors.append(f'{g}: uniform upload count invalid')
+
+# AI++ uniforms must each have one declaration, lookup, and upload.
+for g in ['g_ai_reconstruction','g_ai_strength','g_ai_temporal','g_ai_edge_recovery','g_ai_detail_recovery']:
     if src.count(f'static GLint {g} = -1;') != 1:
         errors.append(f'{g}: declaration count invalid')
     if src.count(f'glUniform1f({g},') != 1:
@@ -128,6 +136,15 @@ if 'com.mobile.legends:UnityKillsMe' in src:
     errors.append('native source still has hard-coded UnityKillsMe target')
 if 'TARGETS' not in monitor_java or 'readTargetPackages' not in monitor_java:
     errors.append('monitor target manager missing')
+manifest_text = (root / 'monitor/app/src/main/AndroidManifest.xml').read_text()
+tile_java = (root / 'monitor/app/src/main/java/com/danzku/monitor/DanzKuTileService.java').read_text()
+if 'DanzKuTileService' not in tile_java:
+    errors.append('Quick Settings tile service class missing')
+if 'class DanzKuTileService' not in tile_java or 'onClick' not in tile_java:
+    errors.append('Quick Settings tile implementation incomplete')
+if 'android.permission.BIND_QUICK_SETTINGS_TILE' not in manifest_text or 'android.service.quicksettings.action.QS_TILE' not in manifest_text:
+    errors.append('Quick Settings tile manifest declaration missing')
+
 if 'package per baris' not in monitor_java:
     errors.append('monitor manual package input missing')
 if 'com.mobile.legends:UnityKillsMe' in monitor_java:

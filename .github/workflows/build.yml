@@ -3,7 +3,7 @@ name: Build DanzKu V5.2.26 + Monitor V5.2.26
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'cleanup/**' ]
 
 jobs:
   monitor-apk:

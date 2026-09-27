@@ -142,8 +142,6 @@ if 'DanzKuTileService' not in tile_java:
     errors.append('Quick Settings tile service class missing')
 if 'class DanzKuTileService' not in tile_java or 'onClick' not in tile_java:
     errors.append('Quick Settings tile implementation incomplete')
-if 'class DanzKuTileService' not in tile_java or 'onClick' not in tile_java:
-    errors.append('Quick Settings tile implementation incomplete')
 if 'android.permission.BIND_QUICK_SETTINGS_TILE' not in manifest_text or 'android.service.quicksettings.action.QS_TILE' not in manifest_text:
     errors.append('Quick Settings tile manifest declaration missing')
 

@@ -4,7 +4,10 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
+import android.provider.MediaStore;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -39,6 +42,10 @@ public class MainActivity extends Activity {
     final AtomicBoolean overlayUpdateRunning = new AtomicBoolean(false);
     LinearLayout root;
     TextView status;
+    TextView runtimeStatus;
+    String currentPage = "home";
+    String selectedPage = "home";
+    volatile String lastDiagnosticText = "Belum ada log diagnostik.";
     Handler handler = new Handler();
     final String CONF = "/data/adb/modules/danzku_visual_shader/config/visual.conf";
     final String CONTROL = "/data/local/tmp/danzku_visual_engine";
@@ -201,6 +208,103 @@ public class MainActivity extends Activity {
     }
 
 
+    void addRootView(View view) {
+        view.setTag(R.id.danzku_page_tag, currentPage);
+        root.addView(view);
+    }
+
+    void selectPage(String page) {
+        selectedPage = page;
+        for (int i = 0; i < root.getChildCount(); i++) {
+            View child = root.getChildAt(i);
+            Object tag = child.getTag(R.id.danzku_page_tag);
+            child.setVisibility(page.equals(tag) ? View.VISIBLE : View.GONE);
+        }
+        if ("runtime".equals(page)) refresh();
+    }
+
+    void addBottomNavigation(LinearLayout host) {
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setGravity(Gravity.CENTER);
+        nav.setPadding(dp(6), dp(7), dp(6), dp(7));
+        nav.setBackgroundColor(uiColor("#10172A"));
+        String[][] tabs = {{"home", "⌂\nHome"}, {"visual", "◈\nVisual"}, {"reconstruction", "✧\nRebuild"}, {"runtime", "▤\nRuntime"}, {"settings", "⚙\nSettings"}};
+        for (String[] tab : tabs) {
+            TextView item = new TextView(this);
+            item.setText(tab[1]);
+            item.setGravity(Gravity.CENTER);
+            item.setTextSize(10);
+            item.setTypeface(null, Typeface.BOLD);
+            item.setPadding(dp(2), dp(5), dp(2), dp(5));
+            item.setTextColor(uiColor(tab[0].equals(selectedPage) ? "#A5AEFF" : "#8994B2"));
+            item.setBackground(roundedBg(tab[0].equals(selectedPage) ? "#202849" : "#10172A", null, 12));
+            nav.addView(item, new LinearLayout.LayoutParams(0, dp(48), 1f));
+            item.setOnClickListener(v -> {
+                for (int j = 0; j < nav.getChildCount(); j++) {
+                    String key = tabs[j][0];
+                    other.setTextColor(uiColor(key.equals(tab[0]) ? "#A5AEFF" : "#8994B2"));
+                    other.setBackground(roundedBg(key.equals(tab[0]) ? "#202849" : "#10172A", null, 12));
+                }
+                selectPage(tab[0]);
+            });
+        }
+        host.addView(nav);
+    }
+
+    void setStatusText(String value) {
+        if (value == null) value = "";
+        lastDiagnosticText = value;
+        if (status != null) status.setText(value);
+        if (runtimeStatus != null) runtimeStatus.setText(value);
+    }
+
+    void addRuntimePanel() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(16), dp(14), dp(16), dp(14));
+        panel.setBackground(roundedBg("#151C32", "#35416A", 18));
+        panel.setLayoutParams(cardParams(0, 12));
+        TextView heading = tv("LIVE RUNTIME DIAGNOSTICS");
+        heading.setTextSize(12);
+        heading.setTypeface(null, Typeface.BOLD);
+        heading.setTextColor(uiColor("#A5AEFF"));
+        heading.setPadding(0, 0, 0, dp(8));
+        panel.addView(heading);
+        Button download = new Button(this);
+        styleActionButton(download);
+        download.setText("DOWNLOAD LOG DIAGNOSTIK");
+        download.setOnClickListener(v -> downloadDiagnosticLog());
+        panel.addView(download);
+        runtimeStatus = tv("Menunggu laporan runtime...");
+        runtimeStatus.setTypeface(Typeface.MONOSPACE);
+        runtimeStatus.setTextSize(11);
+        runtimeStatus.setPadding(0, dp(10), 0, dp(10));
+        panel.addView(runtimeStatus);
+        addRootView(panel);
+    }
+
+    void downloadDiagnosticLog() {
+        String content = lastDiagnosticText;
+        if (content == null || content.trim().isEmpty()) content = "DanzKu Monitor\nBelum ada log diagnostik.";
+        String name = "DanzKu-Monitor-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".txt";
+        try {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Downloads.DISPLAY_NAME, name);
+            values.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
+            values.put(MediaStore.Downloads.RELATIVE_PATH, "Download/DanzKu");
+            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) throw new IOException("MediaStore tidak mengembalikan URI");
+            try (OutputStream stream = getContentResolver().openOutputStream(uri)) {
+                if (stream == null) throw new IOException("Tidak bisa membuka file log");
+                stream.write(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            Toast.makeText(this, "Log tersimpan di Download/DanzKu/" + name, Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Gagal menyimpan log: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
     void buildUi() {
         ScrollView sv = new ScrollView(this);
         sv.setFillViewport(true);
@@ -243,7 +347,7 @@ public class MainActivity extends Activity {
         status.setPadding(dp(14), dp(12), dp(14), dp(12));
         status.setBackground(roundedBg("#0E1528", "#273451", 14));
         hero.addView(status);
-        root.addView(hero);
+        addRootView(hero);
 
         addMasterSwitch();
 
@@ -252,9 +356,11 @@ public class MainActivity extends Activity {
         targets.setText("TARGET APPS / PACKAGE LIST");
         targets.setMinHeight(dp(60));
         targets.setOnClickListener(v -> showTargetAppsDialog());
-        root.addView(targets);
+        addRootView(targets);
         addQuickVisualPresets();
 
+        currentPage = "runtime";
+        addRuntimePanel();
         addSectionHeader("PERFORMANCE & RUNTIME");
         addToggle("RAM Optimization", "ram_optimization");
         addToggle("FPS Boost", "fps_boost");
@@ -357,12 +463,13 @@ public class MainActivity extends Activity {
         addFloatControl("Motion Complexity Scaling", "ai_motion_complexity", 0f, 1f, 0.55f, "", "", "%.2f");
         addToggle("Low-Memory History (half resolution)", "ai_low_memory_history");
 
+        currentPage = "settings";
         Button tuning = new Button(this);
         styleActionButton(tuning);
         tuning.setText("EDIT NILAI VISUAL / CONFIG");
         tuning.setMinHeight(dp(60));
         tuning.setOnClickListener(v -> showVisualConfigEditor());
-        root.addView(tuning);
+        addRootView(tuning);
 
         Button overlayPermission = new Button(this);
         styleActionButton(overlayPermission);
@@ -370,7 +477,7 @@ public class MainActivity extends Activity {
         overlayPermission.setMinHeight(dp(60));
         overlayPermission.setOnClickListener(v -> requestOverlayPermission());
         overlayPermission.setTag("overlay_permission");
-        root.addView(overlayPermission);
+        addRootView(overlayPermission);
 
         Button overlayButton = new Button(this);
         styleActionButton(overlayButton);
@@ -382,17 +489,23 @@ public class MainActivity extends Activity {
             } else requestOverlayPermission();
         });
         overlayButton.setTag("overlay_button");
-        root.addView(overlayButton);
+        addRootView(overlayButton);
 
         Button refresh = new Button(this);
         styleActionButton(refresh);
         refresh.setText("REFRESH STATUS");
         refresh.setMinHeight(dp(60));
         refresh.setOnClickListener(v -> refresh());
-        root.addView(refresh);
+        addRootView(refresh);
 
         sv.addView(root);
-        setContentView(sv);
+        LinearLayout host = new LinearLayout(this);
+        host.setOrientation(LinearLayout.VERTICAL);
+        host.setBackgroundColor(uiColor("#0B1020"));
+        host.addView(sv, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        addBottomNavigation(host);
+        setContentView(host);
+        selectPage("home");
     }
 
 
@@ -599,11 +712,11 @@ public class MainActivity extends Activity {
             b.setOnClickListener(v -> applySmartPreset(name));
             row.addView(b);
         }
-        root.addView(row);
+        addRootView(row);
 
         TextView hint = tv("Rekomendasi cepat: Natural = seimbang • Vivid = warna/detail • Cinematic = kontras/film");
         hint.setTextSize(12);
-        root.addView(hint);
+        addRootView(hint);
     }
 
     void applySmartPreset(String name) {
@@ -746,8 +859,11 @@ public class MainActivity extends Activity {
         hint.setTextColor(uiColor("#8490AF"));
         box.addView(hint);
 
-        root.addView(box);
+        addRootView(box);
     }    void addSectionHeader(String text) {
+        if (text.startsWith("ANTI-ALIASING") || text.startsWith("SHADOWS") || text.startsWith("COLOR & TEXTURE") || text.startsWith("POCO M5")) currentPage = "visual";
+        else if (text.startsWith("TEMPORAL") || text.startsWith("V9") || text.startsWith("V10") || text.startsWith("V11") || text.startsWith("V12") || text.startsWith("AI++")) currentPage = "reconstruction";
+        else if (text.startsWith("PERFORMANCE")) currentPage = "runtime";
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.HORIZONTAL);
         wrap.setGravity(Gravity.CENTER_VERTICAL);
@@ -764,7 +880,7 @@ public class MainActivity extends Activity {
         line.setBackgroundColor(uiColor("#26314D"));
         LinearLayout.LayoutParams lineLp = new LinearLayout.LayoutParams(0, dp(1), 1f);
         wrap.addView(line, lineLp);
-        root.addView(wrap);
+        addRootView(wrap);
     }    void addFloatControl(String title, String key, float min, float max, float def, String barField, String labelField, String format) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -823,7 +939,7 @@ public class MainActivity extends Activity {
         hint.setTextColor(uiColor("#8490AF"));
         hint.setPadding(0, dp(1), 0, 0);
         box.addView(hint);
-        root.addView(box);
+        addRootView(box);
         if ("vibranceSeekBar".equals(barField)) { vibranceSeekBar=bar; vibranceValueLabel=valueLabel; }
         else if ("anisotropicSeekBar".equals(barField)) { anisotropicSeekBar=bar; anisotropicValueLabel=valueLabel; }
         else if ("adaptiveTextureSeekBar".equals(barField)) { adaptiveTextureSeekBar=bar; adaptiveTextureValueLabel=valueLabel; }
@@ -1055,7 +1171,7 @@ public class MainActivity extends Activity {
         });
         featureSwitches.add(sw);
         card.addView(sw);
-        root.addView(card);
+        addRootView(card);
     }    void addToggle(String label, String key) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
@@ -1077,7 +1193,7 @@ public class MainActivity extends Activity {
         featureSwitches.add(sw);
         card.addView(sw, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        root.addView(card);
+        addRootView(card);
     }
 
     static class SuResult {
@@ -1179,7 +1295,7 @@ public class MainActivity extends Activity {
                 attempt[0]++;
                 ioExecutor.execute(() -> {
                     String result = buildStatusText();
-                    runOnUiThread(() -> status.setText(result));
+                    runOnUiThread(() -> setStatusText(result));
                 });
                 if (attempt[0] < 8) h.postDelayed(this, 100);
             }
@@ -1219,7 +1335,7 @@ public class MainActivity extends Activity {
     void requestRefresh() {
         ioExecutor.execute(() -> {
             String result = buildStatusText();
-            runOnUiThread(() -> status.setText(result));
+            runOnUiThread(() -> setStatusText(result));
         });
     }
 
@@ -1487,7 +1603,7 @@ public class MainActivity extends Activity {
         sb.append("\nOverlay: ").append(Settings.canDrawOverlays(this)?"PERMISSION OK":"PERMISSION REQUIRED");
         sb.append("\nConfig changes are applied live; restart is only needed if a specific runtime state does not converge.");
         final String text=sb.toString(), reportCopy=st.report;
-        runOnUiThread(() -> { status.setText(text); syncSwitches(reportCopy, config); updateOverlayPermissionUi(); });
+        runOnUiThread(() -> { setStatusText(text); syncSwitches(reportCopy, config); updateOverlayPermissionUi(); });
         return text;
     }
 

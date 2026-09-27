@@ -9,13 +9,14 @@
     <application
         android:theme="@style/AppTheme"
         android:label="DanzKu Visual Shader"
+        android:icon="@drawable/ic_monitor"
+        android:roundIcon="@drawable/ic_monitor"
         android:allowBackup="false"
         android:supportsRtl="true">
         <service
             android:name=".MonitorTileService"
             android:label="DanzKu Monitor"
-            android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
+            android:icon="@drawable/ic_monitor"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
             android:exported="true">
             <intent-filter>

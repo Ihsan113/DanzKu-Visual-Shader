@@ -1,0 +1,4 @@
+DanzKu Monitor APK UI/runtime status fix
+- V9/V10/V11/V12/POCO tuning sliders now depend on their owning feature toggle and Visual Engine master.
+- Runtime status now exposes feature flags, pipeline/output state, runtime-applied values, and config-only temporal/device values.
+- Native shader code is unchanged.

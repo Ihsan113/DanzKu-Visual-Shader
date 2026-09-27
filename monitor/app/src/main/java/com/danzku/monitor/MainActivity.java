@@ -736,21 +736,45 @@ public class MainActivity extends Activity {
 
     String parentForControl(String key) {
         if (key == null) return null;
+
+        // AI++ controls.
         if (key.startsWith("ai_") && !"ai_dynamic_quality".equals(key)) {
             if ("ai_detail_budget".equals(key) || "ai_motion_complexity".equals(key)) return "ai_dynamic_quality";
             return "ai_reconstruction_v6";
         }
+
+        // Existing feature controls.
         if ("aa_strength".equals(key)) return "advanced_aa";
+        if ("edge_strength".equals(key)) return "edge_aware";
+        if ("shadow_stability".equals(key) || "shadow_refine".equals(key)) return "shadow_enhancement";
+        if ("highlight_refine".equals(key) || "local_contrast".equals(key)) return "lighting_enhancement";
+        if ("material_detail".equals(key)) return "high_end_reconstruction";
         if ("temporal_strength".equals(key)) return "temporal";
         if ("recovery_strength".equals(key)) return "temporal_detail_recovery";
         if ("confidence_strength".equals(key)) return "reconstruction_confidence";
         if ("neural_strength".equals(key) || "structure_strength".equals(key)) return "neural_style_reconstruction";
-        if ("high_end_strength".equals(key) || "material_detail".equals(key)) return "high_end_reconstruction";
-        if ("edge_strength".equals(key)) return "edge_aware";
-        if ("shadow_stability".equals(key) || "shadow_refine".equals(key)) return "shadow_enhancement";
-        if ("highlight_refine".equals(key) || "local_contrast".equals(key)) return "lighting_enhancement";
-        if ("vibrance".equals(key) || "saturation".equals(key)) return "enabled";
-        if ("anisotropic_enhancement".equals(key) || "adaptive_texture_enhancement".equals(key) || "hdr_enhancement".equals(key)) return "enabled";
+        if ("high_end_strength".equals(key)) return "high_end_reconstruction";
+
+        // V9–V12 tuning sliders.
+        if (key.startsWith("v9_")) return "v9_reconstruction";
+        if ("v10_shimmer_strength".equals(key) || "v10_stability_threshold".equals(key)
+                || "v10_stability_softness".equals(key) || "v10_edge_protection".equals(key)) return "v10_antishimmer";
+        if ("v11_ghost_rejection".equals(key) || "v11_detail_threshold".equals(key)
+                || "v11_detail_softness".equals(key) || "v11_color_clip".equals(key)) return "v11_detail_preservation";
+        if ("v12_camera_motion".equals(key) || "v12_motion_softness".equals(key)
+                || "v12_motion_threshold".equals(key) || "v12_history_response".equals(key)
+                || "v12_motion_detail_preservation".equals(key)) return "v12_motion_handling";
+
+        // POCO M5 tuning sliders.
+        if ("poco_m5_quality_scale".equals(key) || "poco_m5_history_scale".equals(key)
+                || "poco_m5_detail_budget".equals(key) || "poco_m5_temporal_response".equals(key)
+                || "poco_m5_motion_cost".equals(key)) return "poco_m5_tuning";
+
+        // Global color/texture controls.
+        if ("vibrance".equals(key) || "saturation".equals(key)
+                || "anisotropic_enhancement".equals(key)
+                || "adaptive_texture_enhancement".equals(key)
+                || "hdr_enhancement".equals(key)) return "enabled";
         return null;
     }
 
@@ -1239,18 +1263,84 @@ public class MainActivity extends Activity {
             sb.append("ENGINE SYNC: WAITING FOR NATIVE RUNTIME\n");
         }
         sb.append("\nRuntime feature status:\n");
-        for (String key : new String[]{"enabled","advanced_aa","shadow_enhancement","contact_shadow","ao_enhancement","specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement","visual_proof","visual_proof_bypass","logging"}) {
-            String v=value(st.report,key); sb.append(key).append(": ").append(v==null?"--":featureState(v)).append("\n");
+        String[] runtimeFeatureKeys = {
+                "enabled","ram_optimization","fps_boost","frame_buffer_optimization",
+                "advanced_aa","edge_aware","shadow_enhancement","contact_shadow","ao_enhancement",
+                "specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement",
+                "temporal","temporal_detail_recovery","reconstruction_confidence",
+                "neural_style_reconstruction","high_end_reconstruction",
+                "visual_proof","visual_proof_bypass","logging",
+                "ai_reconstruction_v6","ai_dynamic_quality","ai_low_memory_history",
+                "v9_reconstruction","v10_antishimmer","v11_detail_preservation",
+                "v12_motion_handling","poco_m5_tuning"
+        };
+        for (String key : runtimeFeatureKeys) {
+            String v = value(st.report, key);
+            sb.append(key).append(": ").append(v == null ? "--" : featureState(v)).append("\n");
         }
-        sb.append("\nTemporal pipeline config:\n");
-        for (String key : new String[]{"v9_reconstruction","v9_reprojection","v9_depth_proxy","v9_history_clip","v9_responsive",
+
+        sb.append("\nRuntime reconstruction/output status:\n");
+        String[] runtimeStateKeys = {
+                "ai_pipeline_ready","history_valid","ai_history_mode",
+                "ai_history_width","ai_history_height","ai_history_pixels",
+                "output_stage_active","output_stage_reject","output_blit_success","output_draw_success",
+                "output_source_width","output_source_height",
+                "reconstruction_width","reconstruction_height",
+                "output_target_width","output_target_height",
+                "viewport_adaptive","viewport_reject",
+                "visual_proof_frames","visual_proof_bypass_frames",
+                "process_calls","process_success","process_skip","process_error",
+                "skip_not_ready","skip_state","skip_fbo","skip_resolve","skip_viewport","skip_gl_error"
+        };
+        for (String key : runtimeStateKeys) {
+            String v = value(st.report, key);
+            if (v != null) sb.append(key).append(": ").append(v).append("\n");
+        }
+
+        sb.append("\nRuntime applied visual values:\n");
+        String[] runtimeValueKeys = {
+                "sharpen","clarity","temporal_strength","motion_threshold","motion_softness",
+                "material_detail","local_contrast","highlight_refine","shadow_refine",
+                "edge_strength","edge_threshold","edge_softness","reconstruction",
+                "recovery_strength","recovery_threshold","confidence_strength","confidence_threshold",
+                "confidence_softness","neural_strength","structure_strength","high_end_strength",
+                "aa_strength","shadow_enhancement","shadow_stability","contact_shadow","ao_enhancement",
+                "specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement",
+                "saturation","vibrance","anisotropic_enhancement","adaptive_texture_enhancement","hdr_enhancement",
+                "ai_motion_strength","ai_reactive_strength","ai_ghost_protection","ai_subpixel_strength",
+                "ai_frequency_detail","ai_edge_sharpen","ai_luma_chroma","ai_highlight_reconstruction",
+                "ai_shadow_recovery","ai_material_reconstruction","ai_detail_budget","ai_motion_complexity",
+                "v9_reprojection","v9_depth_proxy","v9_history_clip","v9_responsive",
+                "v10_shimmer_strength","v10_stability_threshold","v10_stability_softness","v10_edge_protection",
+                "v11_ghost_rejection","v11_detail_threshold","v11_detail_softness","v11_color_clip",
+                "v12_camera_motion","v12_motion_softness","v12_motion_threshold","v12_history_response",
+                "v12_motion_detail_preservation",
+                "poco_m5_quality_scale","poco_m5_history_scale","poco_m5_detail_budget",
+                "poco_m5_temporal_response","poco_m5_motion_cost"
+        };
+        for (String key : runtimeValueKeys) {
+            String v = value(st.report, key);
+            if (v != null) sb.append(key).append(": ").append(v).append("\n");
+        }
+
+        sb.append("\nConfigured temporal/device values:\n");
+        String[] configOnlyKeys = {
+                "v9_reconstruction","v9_reprojection","v9_depth_proxy","v9_history_clip","v9_responsive",
                 "v10_antishimmer","v10_shimmer_strength","v10_stability_threshold","v10_stability_softness","v10_edge_protection",
                 "v11_detail_preservation","v11_ghost_rejection","v11_detail_threshold","v11_detail_softness","v11_color_clip",
-                "v12_motion_handling","v12_camera_motion","v12_motion_softness","v12_motion_threshold","v12_history_response","v12_motion_detail_preservation",
-                "poco_m5_tuning","poco_m5_quality_scale","poco_m5_history_scale","poco_m5_detail_budget","poco_m5_temporal_response","poco_m5_motion_cost"}) {
-            String cv=configValueFromText(config,key);
-            if (cv != null) sb.append(key).append(": ").append(cv).append("\n");
+                "v12_motion_handling","v12_camera_motion","v12_motion_softness","v12_motion_threshold",
+                "v12_history_response","v12_motion_detail_preservation",
+                "poco_m5_tuning","poco_m5_quality_scale","poco_m5_history_scale","poco_m5_detail_budget",
+                "poco_m5_temporal_response","poco_m5_motion_cost"
+        };
+        for (String key : configOnlyKeys) {
+            String cv = configValueFromText(config, key);
+            String rv = value(st.report, key);
+            if (cv != null && rv == null) {
+                sb.append(key).append(": ").append(cv).append(" (config)\n");
+            }
         }
+
         String saturation = configValueFromText(config, "saturation");
         if (saturation != null) sb.append("Saturation Pop: ").append(saturation).append("×\n");
         String pending = pendingFeatures(st.report, config);

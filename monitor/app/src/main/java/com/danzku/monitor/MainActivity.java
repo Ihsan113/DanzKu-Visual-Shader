@@ -45,6 +45,8 @@ public class MainActivity extends Activity {
     TextView runtimeStatus;
     String currentPage = "home";
     String selectedPage = "home";
+    volatile String selectedVisualProfile = "CUSTOM";
+    TextView profileStatusLabel;
     volatile String lastDiagnosticText = "Belum ada log diagnostik.";
     Handler handler = new Handler();
     final String CONF = "/data/adb/modules/danzku_visual_shader/config/visual.conf";
@@ -119,6 +121,7 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         prefs = getSharedPreferences("danzku_monitor", MODE_PRIVATE);
+        selectedVisualProfile = prefs.getString("visual_profile", "CUSTOM");
         initDefaultStrengths();
         syncNativeControlFromConfig();
         buildUi();
@@ -207,6 +210,24 @@ public class MainActivity extends Activity {
         button.setBackground(roundedBg("#5B5CE2", "#7778F5", 14));
     }
 
+    void setButtonBusy(Button button, boolean busy, String idleText, String busyText) {
+        if (button == null) return;
+        button.setEnabled(!busy);
+        button.setText(busy ? busyText : idleText);
+        if (busy) {
+            ProgressBar spinner = new ProgressBar(this);
+            spinner.setIndeterminate(true);
+            android.graphics.drawable.Drawable drawable = spinner.getIndeterminateDrawable();
+            if (drawable != null) {
+                drawable = drawable.mutate();
+                drawable.setBounds(0, 0, dp(18), dp(18));
+                button.setCompoundDrawables(null, null, drawable, null);
+            }
+        } else {
+            button.setCompoundDrawables(null, null, null, null);
+        }
+    }
+
 
     void addRootView(View view) {
         view.setTag(R.id.danzku_page_tag, currentPage);
@@ -227,24 +248,44 @@ public class MainActivity extends Activity {
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
         nav.setGravity(Gravity.CENTER);
-        nav.setPadding(dp(6), dp(7), dp(6), dp(7));
+        nav.setPadding(dp(6), dp(5), dp(6), dp(5));
         nav.setBackgroundColor(uiColor("#10172A"));
-        String[][] tabs = {{"home", "⌂\nHome"}, {"visual", "◈\nVisual"}, {"reconstruction", "✧\nRebuild"}, {"runtime", "▤\nRuntime"}, {"settings", "⚙\nSettings"}};
+        String[][] tabs = {
+                {"home", "⌂", "Home"},
+                {"visual", "◈", "Visual"},
+                {"reconstruction", "✧", "Rebuild"},
+                {"runtime", "▤", "Runtime"},
+                {"settings", "⚙", "Settings"}
+        };
         for (String[] tab : tabs) {
-            TextView item = new TextView(this);
-            item.setText(tab[1]);
+            LinearLayout item = new LinearLayout(this);
+            item.setOrientation(LinearLayout.VERTICAL);
             item.setGravity(Gravity.CENTER);
-            item.setTextSize(10);
-            item.setTypeface(null, Typeface.BOLD);
             item.setPadding(dp(2), dp(5), dp(2), dp(5));
-            item.setTextColor(uiColor(tab[0].equals(selectedPage) ? "#A5AEFF" : "#8994B2"));
             item.setBackground(roundedBg(tab[0].equals(selectedPage) ? "#202849" : "#10172A", null, 12));
+            TextView glyph = new TextView(this);
+            glyph.setText(tab[1]);
+            glyph.setGravity(Gravity.CENTER);
+            glyph.setTextSize(15);
+            glyph.setIncludeFontPadding(false);
+            glyph.setTextColor(uiColor(tab[0].equals(selectedPage) ? "#A5AEFF" : "#8994B2"));
+            TextView label = new TextView(this);
+            label.setText(tab[2]);
+            label.setGravity(Gravity.CENTER);
+            label.setTextSize(10);
+            label.setTypeface(null, Typeface.BOLD);
+            label.setTextColor(uiColor(tab[0].equals(selectedPage) ? "#A5AEFF" : "#8994B2"));
+            item.addView(glyph);
+            item.addView(label);
             nav.addView(item, new LinearLayout.LayoutParams(0, dp(48), 1f));
             item.setOnClickListener(v -> {
                 for (int j = 0; j < nav.getChildCount(); j++) {
-                    String key = tabs[j][0];
-                    other.setTextColor(uiColor(key.equals(tab[0]) ? "#A5AEFF" : "#8994B2"));
-                    other.setBackground(roundedBg(key.equals(tab[0]) ? "#202849" : "#10172A", null, 12));
+                    LinearLayout other = (LinearLayout) nav.getChildAt(j);
+                    boolean selected = tabs[j][0].equals(tab[0]);
+                    other.setBackground(roundedBg(selected ? "#202849" : "#10172A", null, 12));
+                    for (int k = 0; k < other.getChildCount(); k++) {
+                        ((TextView) other.getChildAt(k)).setTextColor(uiColor(selected ? "#A5AEFF" : "#8994B2"));
+                    }
                 }
                 selectPage(tab[0]);
             });
@@ -274,13 +315,28 @@ public class MainActivity extends Activity {
         Button download = new Button(this);
         styleActionButton(download);
         download.setText("DOWNLOAD LOG DIAGNOSTIK");
-        download.setOnClickListener(v -> downloadDiagnosticLog());
+        download.setOnClickListener(v -> {
+            setButtonBusy(download, true, "DOWNLOAD LOG DIAGNOSTIK", "Preparing log...");
+            ioExecutor.execute(() -> {
+                downloadDiagnosticLog();
+                runOnUiThread(() -> setButtonBusy(download, false, "DOWNLOAD LOG DIAGNOSTIK", "Preparing log..."));
+            });
+        });
         panel.addView(download);
         runtimeStatus = tv("Menunggu laporan runtime...");
         runtimeStatus.setTypeface(Typeface.MONOSPACE);
         runtimeStatus.setTextSize(11);
         runtimeStatus.setPadding(0, dp(10), 0, dp(10));
-        panel.addView(runtimeStatus);
+        runtimeStatus.setGravity(Gravity.TOP | Gravity.START);
+        ScrollView runtimeScroll = new ScrollView(this);
+        runtimeScroll.setFillViewport(false);
+        runtimeScroll.setVerticalScrollBarEnabled(true);
+        runtimeScroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        runtimeScroll.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(220)));
+        runtimeScroll.addView(runtimeStatus, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        panel.addView(runtimeScroll);
         addRootView(panel);
     }
 
@@ -299,9 +355,12 @@ public class MainActivity extends Activity {
                 if (stream == null) throw new IOException("Tidak bisa membuka file log");
                 stream.write(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
-            Toast.makeText(this, "Log tersimpan di Download/DanzKu/" + name, Toast.LENGTH_LONG).show();
+            runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                    "Log tersimpan di Download/DanzKu/" + name, Toast.LENGTH_LONG).show());
         } catch (Exception e) {
-            Toast.makeText(this, "Gagal menyimpan log: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            final String error = e.getMessage();
+            runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                    "Gagal menyimpan log: " + error, Toast.LENGTH_LONG).show());
         }
     }
 
@@ -346,7 +405,16 @@ public class MainActivity extends Activity {
         status.setTextColor(uiColor("#DCE4FF"));
         status.setPadding(dp(14), dp(12), dp(14), dp(12));
         status.setBackground(roundedBg("#0E1528", "#273451", 14));
-        hero.addView(status);
+        status.setGravity(Gravity.TOP | Gravity.START);
+        ScrollView statusScroll = new ScrollView(this);
+        statusScroll.setFillViewport(false);
+        statusScroll.setVerticalScrollBarEnabled(true);
+        statusScroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        statusScroll.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(190)));
+        statusScroll.addView(status, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        hero.addView(statusScroll);
         addRootView(hero);
 
         addMasterSwitch();
@@ -469,6 +537,7 @@ public class MainActivity extends Activity {
         tuning.setText("EDIT NILAI VISUAL / CONFIG");
         tuning.setMinHeight(dp(60));
         tuning.setOnClickListener(v -> showVisualConfigEditor());
+        tuning.setLayoutParams(cardParams(0, 10));
         addRootView(tuning);
 
         Button overlayPermission = new Button(this);
@@ -477,6 +546,7 @@ public class MainActivity extends Activity {
         overlayPermission.setMinHeight(dp(60));
         overlayPermission.setOnClickListener(v -> requestOverlayPermission());
         overlayPermission.setTag("overlay_permission");
+        overlayPermission.setLayoutParams(cardParams(0, 10));
         addRootView(overlayPermission);
 
         Button overlayButton = new Button(this);
@@ -489,6 +559,7 @@ public class MainActivity extends Activity {
             } else requestOverlayPermission();
         });
         overlayButton.setTag("overlay_button");
+        overlayButton.setLayoutParams(cardParams(0, 10));
         addRootView(overlayButton);
 
         Button refresh = new Button(this);
@@ -496,6 +567,7 @@ public class MainActivity extends Activity {
         refresh.setText("REFRESH STATUS");
         refresh.setMinHeight(dp(60));
         refresh.setOnClickListener(v -> refresh());
+        refresh.setLayoutParams(cardParams(0, 10));
         addRootView(refresh);
 
         sv.addView(root);
@@ -709,17 +781,46 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(58), 1f);
             lp.setMargins(4, 0, 4, 0);
             b.setLayoutParams(lp);
-            b.setOnClickListener(v -> applySmartPreset(name));
+            b.setOnClickListener(v -> {
+                setButtonBusy(b, true, name, "Applying...");
+                applySmartPreset(name, b);
+            });
             row.addView(b);
         }
         addRootView(row);
+
+        profileStatusLabel = tv("Profil aktif: " + selectedVisualProfile);
+        profileStatusLabel.setTextSize(13);
+        profileStatusLabel.setTypeface(null, Typeface.BOLD);
+        profileStatusLabel.setTextColor(uiColor("#A5AEFF"));
+        profileStatusLabel.setBackground(roundedBg("#141C30", "#35416A", 12));
+        profileStatusLabel.setPadding(dp(12), dp(9), dp(12), dp(9));
+        addRootView(profileStatusLabel);
 
         TextView hint = tv("Rekomendasi cepat: Natural = seimbang • Vivid = warna/detail • Cinematic = kontras/film");
         hint.setTextSize(12);
         addRootView(hint);
     }
 
+    void updateVisualProfile(String profile) {
+        selectedVisualProfile = profile;
+        if (prefs != null) prefs.edit().putString("visual_profile", profile).apply();
+        if (profileStatusLabel != null) {
+            profileStatusLabel.setText("Profil aktif: " + profile);
+        }
+    }
+
+    void markVisualProfileCustom() {
+        if (!"CUSTOM".equals(selectedVisualProfile)) {
+            runOnUiThread(() -> updateVisualProfile("CUSTOM"));
+        }
+    }
+
     void applySmartPreset(String name) {
+        applySmartPreset(name, null);
+    }
+
+    void applySmartPreset(String name, Button sourceButton) {
         final java.util.LinkedHashMap<String,String> values = new java.util.LinkedHashMap<>();
         // The temporal safety layer stays enabled across all presets. Only image character
         // and controlled temporal responsiveness vary by preset.
@@ -727,7 +828,6 @@ public class MainActivity extends Activity {
         values.put("v10_antishimmer", "1");
         values.put("v11_detail_preservation", "1");
         values.put("v12_motion_handling", "1");
-        values.put("poco_m5_tuning", "1");
 
         if ("NATURAL".equals(name)) {
             values.put("sharpen", "0.14");
@@ -802,9 +902,11 @@ public class MainActivity extends Activity {
                 writeConfigValue(e.getKey(), e.getValue());
             }
             syncNativeControlFromConfigNow();
-            runOnUiThread(() ->
-                Toast.makeText(MainActivity.this, "Preset " + name + " diterapkan", Toast.LENGTH_SHORT).show()
-            );
+            runOnUiThread(() -> {
+                updateVisualProfile(name);
+                setButtonBusy(sourceButton, false, name, "Applying...");
+                Toast.makeText(MainActivity.this, "Preset " + name + " diterapkan", Toast.LENGTH_SHORT).show();
+            });
         });
     }
 
@@ -841,6 +943,7 @@ public class MainActivity extends Activity {
                 if (!seekBar.isEnabled()) return;
                 final float value = 1.0f + (seekBar.getProgress() / 100.0f);
                 ioExecutor.execute(() -> {
+                    markVisualProfileCustom();
                     writeConfigValue("saturation", String.format(Locale.US, "%.2f", value));
                     syncNativeControlFromConfigNow();
                     runOnUiThread(() -> {
@@ -923,6 +1026,7 @@ public class MainActivity extends Activity {
                 if (!seekBar.isEnabled()) return;
                 final float v = min + (seekBar.getProgress() / (float)maxProgress) * (max - min);
                 ioExecutor.execute(() -> {
+                    markVisualProfileCustom();
                     writeConfigValue(key, String.format(Locale.US, format, v));
                     syncNativeControlFromConfigNow();
                     runOnUiThread(() -> Toast.makeText(MainActivity.this,
@@ -1020,7 +1124,7 @@ public class MainActivity extends Activity {
             public void onStopTrackingTouch(SeekBar seekBar) {
                 if (!seekBar.isEnabled()) return;
                 final float v=min+(seekBar.getProgress()/100.0f)*(max-min);
-                ioExecutor.execute(() -> { writeConfigValue(key, String.format(Locale.US, format, v)); syncNativeControlFromConfigNow(); });
+                ioExecutor.execute(() -> { markVisualProfileCustom(); writeConfigValue(key, String.format(Locale.US, format, v)); syncNativeControlFromConfigNow(); });
             }
         });
         String enabled = configValueFromText(config, "enabled");
@@ -1264,6 +1368,7 @@ public class MainActivity extends Activity {
     void setFeatureKey(String key, boolean on) {
         // Serialize config edit -> bridge sync -> runtime refresh so a toggle
         // cannot race with a stale status read.
+        markVisualProfileCustom();
         ioExecutor.execute(() -> {
             String current = configValue(key);
             if (on) {

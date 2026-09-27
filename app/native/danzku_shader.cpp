@@ -191,6 +191,130 @@ static bool ensure_dir(const std::string& path) {
 
 static zygisk::Api* g_api = nullptr;
 using EglSwapBuffersFn = EGLBoolean (*)(EGLDisplay, EGLSurface);
+static EglSwapBuffersFn g_orig_eglSwapBuffers = nullptr;
+static volatile unsigned long long g_hook_calls = 0;
+
+static volatile bool g_hook_installed = false;
+
+// V5.2 frame telemetry: read-only measurement around the proven eglSwapBuffers hook.
+// This does not alter frame pacing, refresh rate, GPU clocks, or SurfaceFlinger.
+static pthread_mutex_t g_fps_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_fps_last_ns = 0;
+static double g_fps_current = 0.0;
+static double g_fps_avg = 0.0;
+static double g_frame_time_ms = 0.0;
+static double g_fps_one_percent_low = 0.0;
+static unsigned long long g_fps_samples = 0;
+static unsigned long long g_jank_frames_20ms = 0;
+static double g_fps_window[300] = {};
+static double g_frame_window_ms[300] = {};
+static size_t g_fps_window_count = 0;
+static size_t g_fps_window_pos = 0;
+static double g_fps_window_sum = 0.0;
+
+// Short presentation window for a responsive Render FPS value.
+// It measures frame submissions through the proven eglSwapBuffers hook.
+static uint64_t g_render_window_start_ns = 0;
+static unsigned long long g_render_window_frames = 0;
+
+static uint64_t monotonic_ns() {
+    struct timespec ts{};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+           static_cast<uint64_t>(ts.tv_nsec);
+}
+
+static void update_fps_telemetry() {
+    const uint64_t now = monotonic_ns();
+    if (!now) return;
+
+    pthread_mutex_lock(&g_fps_mutex);
+
+    if (g_fps_last_ns == 0) {
+        g_fps_last_ns = now;
+        g_render_window_start_ns = now;
+        g_render_window_frames = 0;
+        pthread_mutex_unlock(&g_fps_mutex);
+        return;
+    }
+
+    if (now > g_fps_last_ns) {
+        const double ms = static_cast<double>(now - g_fps_last_ns) / 1000000.0;
+
+        if (ms >= 1.0 && ms <= 1000.0) {
+            const double instantaneous_fps = 1000.0 / ms;
+            g_frame_time_ms = ms;
+
+            if (ms > 20.0) ++g_jank_frames_20ms;
+
+            // Realtime Render FPS: count eglSwapBuffers submissions over a
+            // short monotonic window instead of exposing a noisy single-frame
+            // reciprocal. This is read-only telemetry and does not alter swap.
+            if (g_render_window_start_ns == 0) {
+                g_render_window_start_ns = g_fps_last_ns;
+                g_render_window_frames = 0;
+            }
+            ++g_render_window_frames;
+            const uint64_t window_ns = now - g_render_window_start_ns;
+            if (window_ns >= 250000000ULL) {
+                g_fps_current =
+                    (static_cast<double>(g_render_window_frames) * 1000000000.0) /
+                    static_cast<double>(window_ns);
+                g_render_window_start_ns = now;
+                g_render_window_frames = 0;
+            } else if (g_fps_current <= 0.0) {
+                // Make telemetry useful immediately during the first window.
+                g_fps_current = instantaneous_fps;
+            }
+
+            if (g_fps_window_count < 300) {
+                g_fps_window[g_fps_window_count] = instantaneous_fps;
+                g_frame_window_ms[g_fps_window_count] = ms;
+                g_fps_window_sum += instantaneous_fps;
+                ++g_fps_window_count;
+            } else {
+                g_fps_window_sum -= g_fps_window[g_fps_window_pos];
+                g_fps_window[g_fps_window_pos] = instantaneous_fps;
+                g_frame_window_ms[g_fps_window_pos] = ms;
+                g_fps_window_sum += instantaneous_fps;
+                g_fps_window_pos = (g_fps_window_pos + 1) % 300;
+            }
+            ++g_fps_samples;
+
+            // Rolling average is O(1). Recalculate 1% low only periodically;
+            // sorting 300 samples on every swap is unnecessarily expensive.
+            if (g_fps_window_count) {
+                g_fps_avg = g_fps_window_sum /
+                            static_cast<double>(g_fps_window_count);
+            }
+
+            if ((g_fps_samples % 30ULL) == 0ULL || g_fps_window_count == 1) {
+                std::vector<double> sorted(
+                    g_fps_window, g_fps_window + g_fps_window_count);
+                std::sort(sorted.begin(), sorted.end());
+                size_t low_count =
+                    std::max<size_t>(1, (g_fps_window_count + 99) / 100);
+                double low_sum = 0.0;
+                for (size_t i = 0; i < low_count; ++i) {
+                    low_sum += sorted[i];
+                }
+                g_fps_one_percent_low =
+                    low_sum / static_cast<double>(low_count);
+            }
+        } else if (ms > 1000.0) {
+            // A long pause is not a valid instantaneous FPS sample. Reset the
+            // short window so the next active period starts cleanly.
+            g_render_window_start_ns = now;
+            g_render_window_frames = 0;
+        }
+    }
+
+    g_fps_last_ns = now;
+    pthread_mutex_unlock(&g_fps_mutex);
+}
+
+static std::string hex_ptr(const void* p);
+
 static std::string gl_string(GLenum name) {
     const GLubyte* value = glGetString(name);
     return value ? reinterpret_cast<const char*>(value) : "(null)";
@@ -387,6 +511,9 @@ static volatile unsigned int g_v27_last_fbo_diag_error = GL_NO_ERROR;
 static volatile unsigned int g_v27_last_error = GL_NO_ERROR;
 static volatile unsigned long long g_v27_last_report_calls = 0;
 
+static volatile unsigned long long g_v27_config_read_success = 0;
+static volatile unsigned long long g_v27_config_parse_success = 0;
+static volatile unsigned long long g_v27_config_sync_count = 0;
 static volatile int g_v27_config_open_success = 0;
 static volatile int g_v27_config_last_errno = 0;
 static volatile long long g_v27_config_bytes_read = 0;
@@ -473,6 +600,8 @@ static std::string config_file_path() {
     return "";
 }
 
+static std::string hex_ptr(const void* p);
+
 static void v27_write_runtime_report();
 
 static uint64_t monotonic_ns() {
@@ -480,6 +609,104 @@ static uint64_t monotonic_ns() {
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
     return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
            static_cast<uint64_t>(ts.tv_nsec);
+}
+
+static bool parse_config_bool(const std::string& value, bool fallback) {
+    const std::string v = trim_copy(value);
+    if (v == "1" || v == "true" || v == "TRUE" || v == "on" || v == "ON" || v == "yes" || v == "YES") return true;
+    if (v == "0" || v == "false" || v == "FALSE" || v == "off" || v == "OFF" || v == "no" || v == "NO") return false;
+    return fallback;
+}
+
+static float parse_config_float(const std::string& value, float fallback) {
+    const std::string v = trim_copy(value);
+    if (v.empty()) return fallback;
+    char* end = nullptr;
+    errno = 0;
+    const float parsed = strtof(v.c_str(), &end);
+    if (end == v.c_str() || errno == ERANGE || !std::isfinite(parsed)) return fallback;
+    while (*end == ' ' || *end == '\t' || *end == '\r') ++end;
+    return *end == '\0' ? parsed : fallback;
+}
+
+static void parse_v27_config() {
+    ++g_v27_config_sync_count;
+    const std::string text = read_small_config();
+    if (text.empty()) return;
+    ++g_v27_config_read_success;
+    bool parsed_any = false;
+    size_t start = 0;
+    while (start <= text.size()) {
+        size_t end = text.find('\n', start);
+        if (end == std::string::npos) end = text.size();
+        std::string line = trim_copy(text.substr(start, end - start));
+        if (!line.empty() && line[0] != '#') {
+            const size_t comment = line.find('#');
+            if (comment != std::string::npos) line = trim_copy(line.substr(0, comment));
+            const size_t eq = line.find('=');
+            if (eq != std::string::npos) {
+                const std::string key = trim_copy(line.substr(0, eq));
+                const std::string value = trim_copy(line.substr(eq + 1));
+                if (key == "enabled") { g_v27_enabled_value = parse_config_bool(value, g_v27_enabled_value); parsed_any = true; }
+                else if (key == "logging") { g_v27_logging_value = parse_config_bool(value, g_v27_logging_value); parsed_any = true; }
+                else if (key == "ram_optimization") { g_ram_optimization_value = parse_config_bool(value, g_ram_optimization_value); parsed_any = true; }
+                else if (key == "fps_boost") { g_fps_boost_value = parse_config_bool(value, g_fps_boost_value); parsed_any = true; }
+                else if (key == "reconstruction_output") { g_v27_reconstruction_output_value = parse_config_bool(value, g_v27_reconstruction_output_value); parsed_any = true; }
+                else if (key == "visual_proof") { g_v26_visual_proof_value = parse_config_bool(value, (g_v26_visual_proof_value != 0)); parsed_any = true; }
+                else if (key == "visual_proof_bypass") { g_v26_visual_proof_bypass = parse_config_bool(value, (g_v26_visual_proof_bypass != 0)); parsed_any = true; }
+                else if (key == "temporal") { g_v28_temporal_value = parse_config_bool(value, g_v28_temporal_value); parsed_any = true; }
+                else if (key == "motion_aware") { g_v285_motion_aware_value = parse_config_bool(value, g_v285_motion_aware_value); parsed_any = true; }
+                else if (key == "edge_aware") { g_v295_edge_aware_value = parse_config_bool(value, g_v295_edge_aware_value); parsed_any = true; }
+                else if (key == "dynamic_quality") { g_v31_dynamic_quality_value = parse_config_bool(value, g_v31_dynamic_quality_value); parsed_any = true; }
+                else if (key == "temporal_detail_recovery") { g_v32_temporal_recovery_value = parse_config_bool(value, g_v32_temporal_recovery_value); parsed_any = true; }
+                else if (key == "reconstruction_confidence") { g_v33_confidence_value = parse_config_bool(value, g_v33_confidence_value); parsed_any = true; }
+                else if (key == "neural_style_reconstruction") { g_v35_neural_style_value = parse_config_bool(value, g_v35_neural_style_value); parsed_any = true; }
+                else if (key == "high_end_reconstruction") { g_v40_high_end_value = parse_config_bool(value, g_v40_high_end_value); parsed_any = true; }
+                else if (key == "advanced_aa") { g_v5_aa_value = parse_config_bool(value, g_v5_aa_value); parsed_any = true; }
+                else if (key == "frame_buffer_optimization") { g_v6_frame_buffer_optimization_value = parse_config_bool(value, g_v6_frame_buffer_optimization_value); parsed_any = true; }
+                else if (key == "sharpen") { g_v27_sharpen_value = parse_config_float(value, g_v27_sharpen_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "clarity") { g_v27_clarity_value = parse_config_float(value, g_v27_clarity_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "temporal_strength") { g_v28_temporal_strength = parse_config_float(value, g_v28_temporal_strength); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "motion_threshold") { g_v285_motion_threshold_value = parse_config_float(value, g_v285_motion_threshold_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "motion_softness") { g_v285_motion_softness_value = parse_config_float(value, g_v285_motion_softness_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "material_detail") { g_v291_material_detail_value = parse_config_float(value, g_v291_material_detail_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "local_contrast") { g_v291_local_contrast_value = parse_config_float(value, g_v291_local_contrast_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "highlight_refine") { g_v291_highlight_refine_value = parse_config_float(value, g_v291_highlight_refine_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "shadow_refine") { g_v291_shadow_refine_value = parse_config_float(value, g_v291_shadow_refine_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "edge_strength") { g_v295_edge_strength_value = parse_config_float(value, g_v295_edge_strength_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "edge_threshold") { g_v295_edge_threshold_value = parse_config_float(value, g_v295_edge_threshold_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "edge_softness") { g_v295_edge_softness_value = parse_config_float(value, g_v295_edge_softness_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "reconstruction") { g_v30_reconstruction_value = parse_config_float(value, g_v30_reconstruction_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "quality_min") { g_v31_quality_min_value = parse_config_float(value, g_v31_quality_min_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "quality_max") { g_v31_quality_max_value = parse_config_float(value, g_v31_quality_max_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "recovery_strength") { g_v32_recovery_strength_value = parse_config_float(value, g_v32_recovery_strength_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "recovery_threshold") { g_v32_recovery_threshold_value = parse_config_float(value, g_v32_recovery_threshold_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "confidence_strength") { g_v33_confidence_strength_value = parse_config_float(value, g_v33_confidence_strength_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "confidence_threshold") { g_v33_confidence_threshold_value = parse_config_float(value, g_v33_confidence_threshold_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "confidence_softness") { g_v33_confidence_softness_value = parse_config_float(value, g_v33_confidence_softness_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "neural_strength") { g_v35_neural_strength_value = parse_config_float(value, g_v35_neural_strength_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "structure_strength") { g_v35_structure_strength_value = parse_config_float(value, g_v35_structure_strength_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "high_end_strength") { g_v40_high_end_strength_value = parse_config_float(value, g_v40_high_end_strength_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "aa_strength") { g_v5_aa_strength_value = parse_config_float(value, g_v5_aa_strength_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "shadow_enhancement") { g_v5_shadow_value = parse_config_float(value, g_v5_shadow_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "shadow_stability") { g_v5_shadow_stability_value = parse_config_float(value, g_v5_shadow_stability_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "contact_shadow") { g_v5_contact_shadow_value = parse_config_float(value, g_v5_contact_shadow_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "ao_enhancement") { g_v5_ao_value = parse_config_float(value, g_v5_ao_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "specular_enhancement") { g_v5_specular_value = parse_config_float(value, g_v5_specular_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "reflection_approximation") { g_v5_reflection_value = parse_config_float(value, g_v5_reflection_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "lighting_enhancement") { g_v5_lighting_value = parse_config_float(value, g_v5_lighting_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "effect_enhancement") { g_v5_effect_value = parse_config_float(value, g_v5_effect_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "saturation") { g_v5_saturation_value = parse_config_float(value, g_v5_saturation_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "vibrance") { g_v6_vibrance_value = parse_config_float(value, g_v6_vibrance_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "anisotropic_enhancement") { g_v6_anisotropic_value = parse_config_float(value, g_v6_anisotropic_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "adaptive_texture_enhancement") { g_v6_adaptive_texture_value = parse_config_float(value, g_v6_adaptive_texture_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+                else if (key == "hdr_enhancement") { g_v6_hdr_value = parse_config_float(value, g_v6_hdr_value); if (key == "reconstruction") g_v27_config_reconstruction_key_seen = 1; parsed_any = true; }
+            }
+        }
+        if (end == text.size()) break;
+        start = end + 1;
+    }
+    if (parsed_any) ++g_v27_config_parse_success;
 }
 
 static bool reload_v27_config_if_changed(bool force = false) {
@@ -1497,6 +1724,7 @@ static bool v27_process_frame(EGLSurface surface) {
     const float proof_reflection = (visual_proof_bypass ? 0.0f : g_v5_reflection_value);
     const float proof_lighting = (visual_proof_bypass ? 0.0f : g_v5_lighting_value);
     const float proof_effect = (visual_proof_bypass ? 0.0f : g_v5_effect_value);
+    const float proof_saturation = (visual_proof_bypass ? 1.0f : g_v5_saturation_value);
     glUniform1f(g_v27_sharpen, proof_sharpen);
     glUniform1f(g_v27_clarity, proof_clarity);
     glUniform1f(g_v27_enabled, g_v27_enabled_value ? 1.0f : 0.0f);

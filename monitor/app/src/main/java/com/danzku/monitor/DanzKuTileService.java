@@ -36,7 +36,7 @@ public class DanzKuTileService extends TileService {
     private void refreshTileAsync() {
         new Thread(() -> {
             String value = runRootCommand(
-                "sed -n 's/^enabled=//p' \\"" + CONF + "\\" 2>/dev/null | head -n 1"
+                "sed -n 's/^enabled=//p' \"" + CONF + "\" 2>/dev/null | head -n 1"
             );
             setTileFromValue(value);
         }, "danzku-tile-read").start();
@@ -44,7 +44,7 @@ public class DanzKuTileService extends TileService {
 
     private String runRootToggleCommand() {
         String command =
-            "CONF=\\\"" + CONF + "\\\"; BRIDGE=\\\"" + BRIDGE + "\\\"; CONTROL=\\\"" + CONTROL + "\\\"; " +
+            "CONF=\"" + CONF + "\"; BRIDGE=\"" + BRIDGE + "\"; CONTROL=\"" + CONTROL + "\"; " +
             "CUR=$(sed -n 's/^enabled=//p' \"$CONF\" 2>/dev/null | head -n 1); " +
             "case \"$CUR\" in 1) NEXT=0;; *) NEXT=1;; esac; " +
             "sed \"s/^enabled=.*/enabled=$NEXT/\" \"$CONF\" > \"$CONF.tmp\" && " +

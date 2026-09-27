@@ -138,6 +138,9 @@ if 'TARGETS' not in monitor_java or 'readTargetPackages' not in monitor_java:
     errors.append('monitor target manager missing')
 if 'DanzKuTileService' not in monitor_java:
     errors.append('Quick Settings tile service class missing')
+tile_java = (root / 'monitor/app/src/main/java/com/danzku/monitor/DanzKuTileService.java').read_text()
+if 'class DanzKuTileService' not in tile_java or 'onClick' not in tile_java or 'android.service.quicksettings.action.QS_TILE' not in manifest_text:
+    errors.append('Quick Settings tile implementation incomplete')
 manifest_text = (root / 'monitor/app/src/main/AndroidManifest.xml').read_text()
 if 'android.permission.BIND_QUICK_SETTINGS_TILE' not in manifest_text or 'android.service.quicksettings.action.QS_TILE' not in manifest_text:
     errors.append('Quick Settings tile manifest declaration missing')

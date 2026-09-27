@@ -77,3 +77,5 @@ The Media Probe has been removed. YouTube uses a separate `config/media.conf` pr
 - Media hook is GOT-only and fails closed if no suitable app-local relocation exists.
 - Game settings remain in `config/visual.conf`.
 
+
+<!-- Build verification touchpoint -->

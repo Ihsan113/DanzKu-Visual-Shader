@@ -1660,33 +1660,35 @@ static void append_egl_gl_probe(std::string& out, EGLDisplay dpy, EGLSurface sur
 static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     const bool was_enabled = g_v27_enabled_value;
     const bool config_changed = reload_v27_config_if_changed(false);
-    if (was_enabled && !g_v27_enabled_value && g_v27_initialized) v27_release_resources();
-    if (config_changed) v27_write_runtime_report();
-    if (g_v27_enabled_value) update_fps_telemetry();
-    ++g_hook_calls;
-        EGLint w = 0, h = 0;
-        const bool candidate = media_surface_candidate(dpy, surface, &w, &h);
-        if (candidate) {
-            if (!g_v27_initialized) v27_init((int)w, (int)h);
-            if (g_v27_initialized && v27_process_frame(surface)) {
-            }
-        }
-        if (g_orig_eglSwapBuffers) return g_orig_eglSwapBuffers(dpy, surface);
-        return EGL_FALSE;
+
+    if (was_enabled && !g_v27_enabled_value && g_v27_initialized) {
+        v27_release_resources();
     }
-    // Probe only once per process. It observes the current EGL/GL state and does not
-    // modify framebuffer contents, viewport, textures, or swap behavior.
+    if (config_changed) {
+        v27_write_runtime_report();
+    }
+    if (g_v27_enabled_value) {
+        update_fps_telemetry();
+    }
+    ++g_hook_calls;
+
     static volatile bool probe_done = false;
     if (!probe_done) {
         probe_done = true;
+
         std::string report = "stage=v261_probe\n";
         report += "pid=" + std::to_string((int)getpid()) + "\n";
         report += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\n";
         append_egl_gl_probe(report, dpy, surface);
-        if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v261_" + std::to_string((int)getpid()) + ".txt", report);
-        EGLint w=0,h=0;
-        if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE) w=0;
-        if (eglQuerySurface(dpy, surface, EGL_HEIGHT, &h) != EGL_TRUE) h=0;
+        if (g_v27_logging_value) {
+            write_file(g_app_files_dir + "/danzku_v261_" +
+                       std::to_string((int)getpid()) + ".txt", report);
+        }
+
+        EGLint w = 0, h = 0;
+        if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE) w = 0;
+        if (eglQuerySurface(dpy, surface, EGL_HEIGHT, &h) != EGL_TRUE) h = 0;
+
         if (v27_init((int)w, (int)h)) {
             std::string v27 = "stage=v40_init\n";
             v27 += "pid=" + std::to_string((int)getpid()) + "\n";
@@ -1729,22 +1731,31 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
             v27 += "saturation=" + std::to_string(g_v5_saturation_value) + "\n";
             v27 += "width=" + std::to_string((int)w) + "\n";
             v27 += "height=" + std::to_string((int)h) + "\n";
-            if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v40_init_" + std::to_string((int)getpid()) + ".txt", v27);
-        } else {
-            if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v40_init_fail_" + std::to_string((int)getpid()) + ".txt",
-                       "stage=v40_init_fail\npid=" + std::to_string((int)getpid()) + "\n");
+            if (g_v27_logging_value) {
+                write_file(g_app_files_dir + "/danzku_v40_init_" +
+                           std::to_string((int)getpid()) + ".txt", v27);
+            }
+        } else if (g_v27_logging_value) {
+            write_file(g_app_files_dir + "/danzku_v40_init_fail_" +
+                       std::to_string((int)getpid()) + ".txt",
+                       "stage=v40_init_fail\npid=" +
+                       std::to_string((int)getpid()) + "\n");
         }
     }
+
     if (g_v27_enabled_value && !g_v27_initialized) {
-        EGLint w=0,h=0;
-        if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE) w=0;
-        if (eglQuerySurface(dpy, surface, EGL_HEIGHT, &h) != EGL_TRUE) h=0;
+        EGLint w = 0, h = 0;
+        if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE) w = 0;
+        if (eglQuerySurface(dpy, surface, EGL_HEIGHT, &h) != EGL_TRUE) h = 0;
         v27_init((int)w, (int)h);
     }
     if (g_v27_initialized && g_v27_enabled_value) {
         v27_process_frame(surface);
     }
-    if (g_orig_eglSwapBuffers) return g_orig_eglSwapBuffers(dpy, surface);
+
+    if (g_orig_eglSwapBuffers) {
+        return g_orig_eglSwapBuffers(dpy, surface);
+    }
     return EGL_FALSE;
 }
 

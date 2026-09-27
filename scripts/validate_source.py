@@ -77,6 +77,20 @@ for g in ['g_v5_aa','g_v5_aa_strength','g_v5_shadow','g_v5_shadow_stability','g_
     if src.count(f'glUniform1f({g},') != 1:
         errors.append(f'{g}: uniform upload count invalid')
 
+# V6.0-V6.2 runtime report must expose all AI config and history telemetry.
+ai_report_tokens = [
+    'ai_reconstruction_v6=', 'ai_motion_strength=', 'ai_reactive_strength=',
+    'ai_ghost_protection=', 'ai_subpixel_strength=', 'ai_frequency_detail=',
+    'ai_edge_sharpen=', 'ai_luma_chroma=', 'ai_highlight_reconstruction=',
+    'ai_shadow_recovery=', 'ai_material_reconstruction=', 'ai_dynamic_quality=',
+    'ai_detail_budget=', 'ai_motion_complexity=', 'ai_low_memory_history=',
+    'ai_history_width=', 'ai_history_height=', 'ai_history_pixels=',
+    'ai_history_mode=', 'ai_pipeline_ready=',
+]
+for token in ai_report_tokens:
+    if token not in src:
+        errors.append(f'missing V6 AI runtime report token: {token}')
+
 # V5.2.26 diagnostic requirements.
 diagnostic_tokens = [
     'g_v27_last_draw_fbo', 'g_v27_last_read_fbo',

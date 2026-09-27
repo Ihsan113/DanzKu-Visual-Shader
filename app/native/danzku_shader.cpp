@@ -1433,6 +1433,27 @@ static void v27_write_runtime_report() {
     out += "saturation=" + std::to_string(g_v5_saturation_value) + "\n";
     out += "ram_optimization=" + std::to_string(g_ram_optimization_value ? 1 : 0) + "\n";
     out += "fps_boost=" + std::to_string(g_fps_boost_value ? 1 : 0) + "\n";
+    // V6.0-V6.2 AI reconstruction diagnostics: configured values and runtime state.
+    out += "ai_reconstruction_v6=" + std::to_string(g_ai_reconstruction_v6_value ? 1 : 0) + "\n";
+    out += "ai_motion_strength=" + std::to_string(g_ai_motion_strength_value) + "\n";
+    out += "ai_reactive_strength=" + std::to_string(g_ai_reactive_strength_value) + "\n";
+    out += "ai_ghost_protection=" + std::to_string(g_ai_ghost_protection_value) + "\n";
+    out += "ai_subpixel_strength=" + std::to_string(g_ai_subpixel_strength_value) + "\n";
+    out += "ai_frequency_detail=" + std::to_string(g_ai_frequency_detail_value) + "\n";
+    out += "ai_edge_sharpen=" + std::to_string(g_ai_edge_sharpen_value) + "\n";
+    out += "ai_luma_chroma=" + std::to_string(g_ai_luma_chroma_value) + "\n";
+    out += "ai_highlight_reconstruction=" + std::to_string(g_ai_highlight_reconstruction_value) + "\n";
+    out += "ai_shadow_recovery=" + std::to_string(g_ai_shadow_recovery_value) + "\n";
+    out += "ai_material_reconstruction=" + std::to_string(g_ai_material_reconstruction_value) + "\n";
+    out += "ai_dynamic_quality=" + std::to_string(g_ai_dynamic_quality_value ? 1 : 0) + "\n";
+    out += "ai_detail_budget=" + std::to_string(g_ai_detail_budget_value) + "\n";
+    out += "ai_motion_complexity=" + std::to_string(g_ai_motion_complexity_value) + "\n";
+    out += "ai_low_memory_history=" + std::to_string(g_ai_low_memory_history_value ? 1 : 0) + "\n";
+    out += "ai_history_width=" + std::to_string(g_v28_history_width) + "\n";
+    out += "ai_history_height=" + std::to_string(g_v28_history_height) + "\n";
+    out += "ai_history_pixels=" + std::to_string((long long)g_v28_history_width * (long long)g_v28_history_height) + "\n";
+    out += "ai_history_mode=" + std::string(g_ai_low_memory_history_value ? "half_resolution" : "full_resolution") + "\n";
+    out += "ai_pipeline_ready=" + std::to_string((g_v27_program && g_v28_history_texture && g_ai_reconstruction_v6_value) ? 1 : 0) + "\n";
     out += "history_valid=" + std::to_string(g_v28_history_valid ? 1 : 0) + "\n";
     pthread_mutex_lock(&g_fps_mutex);
     char fps_buf[64] = {};

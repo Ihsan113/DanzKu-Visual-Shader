@@ -24,7 +24,7 @@ public class DanzKuTileService extends TileService {
         super.onClick();
         unlockAndRun(() -> {
             String result = runRootToggleCommand();
-            boolean ok = result != null && (result.contains("\n1") || result.trim().equals("1") || result.trim().equals("0"));
+            boolean ok = result != null && (result.trim().equals("1") || result.trim().equals("0"));
             if (!ok) {
                 refreshTileAsync();
                 return;

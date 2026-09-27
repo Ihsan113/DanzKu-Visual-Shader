@@ -356,6 +356,7 @@ static GLint g_v27_pos = -1;
 static GLint g_v27_uv = -1;
 static GLint g_v27_tex = -1;
 static GLint g_v27_texel = -1;
+static GLint g_v28_history_scale = -1;
 static GLint g_v27_sharpen = -1;
 static GLint g_v27_clarity = -1;
 static GLint g_v27_enabled = -1;
@@ -404,6 +405,20 @@ static GLint g_v6_vibrance = -1;
 static GLint g_v6_anisotropic = -1;
 static GLint g_v6_adaptive_texture = -1;
 static GLint g_v6_hdr = -1;
+static GLint g_ai_reconstruction_v6_uniform = -1;
+static GLint g_ai_motion_strength_uniform = -1;
+static GLint g_ai_reactive_strength_uniform = -1;
+static GLint g_ai_ghost_protection_uniform = -1;
+static GLint g_ai_subpixel_strength_uniform = -1;
+static GLint g_ai_frequency_detail_uniform = -1;
+static GLint g_ai_edge_sharpen_uniform = -1;
+static GLint g_ai_luma_chroma_uniform = -1;
+static GLint g_ai_highlight_reconstruction_uniform = -1;
+static GLint g_ai_shadow_recovery_uniform = -1;
+static GLint g_ai_material_reconstruction_uniform = -1;
+static GLint g_ai_dynamic_quality_uniform = -1;
+static GLint g_ai_detail_budget_uniform = -1;
+static GLint g_ai_motion_complexity_uniform = -1;
 static int g_v27_width = 0;
 static int g_v27_height = 0;
 static volatile EGLint g_v27_last_surface_width = 0;
@@ -430,6 +445,21 @@ static off_t g_v27_config_size = -1;
 static bool g_v27_control_present = false;
 static uint64_t g_v27_config_check_ns = 0;
 static bool g_v28_temporal_value = true;
+static bool g_ai_low_memory_history_value = true;
+static bool g_ai_reconstruction_v6_value = 1;
+static float g_ai_motion_strength_value = 0.55f;
+static float g_ai_reactive_strength_value = 0.35f;
+static float g_ai_ghost_protection_value = 0.55f;
+static float g_ai_subpixel_strength_value = 0.18f;
+static float g_ai_frequency_detail_value = 0.22f;
+static float g_ai_edge_sharpen_value = 0.16f;
+static float g_ai_luma_chroma_value = 0.16f;
+static float g_ai_highlight_reconstruction_value = 0.08f;
+static float g_ai_shadow_recovery_value = 0.1f;
+static float g_ai_material_reconstruction_value = 0.18f;
+static bool g_ai_dynamic_quality_value = 1;
+static float g_ai_detail_budget_value = 0.8f;
+static float g_ai_motion_complexity_value = 0.55f;
 static float g_v28_temporal_strength = 0.20f;
 static bool g_v285_motion_aware_value = true;
 static float g_v285_motion_threshold_value = 0.020f;
@@ -588,6 +618,21 @@ static void parse_v27_config() {
             else if (key == "sharpen") g_v27_sharpen_value = strtof(val.c_str(), nullptr);
             else if (key == "clarity") g_v27_clarity_value = strtof(val.c_str(), nullptr);
             else if (key == "temporal") g_v28_temporal_value = (atoi(val.c_str()) != 0);
+            else if (key == "ai_low_memory_history") g_ai_low_memory_history_value = (atoi(val.c_str()) != 0);
+            else if (key == "ai_reconstruction_v6") g_ai_reconstruction_v6_value = (atoi(val.c_str()) != 0);
+            else if (key == "ai_motion_strength") g_ai_motion_strength_value = strtof(val.c_str(), nullptr);
+            else if (key == "ai_reactive_strength") g_ai_reactive_strength_value = strtof(val.c_str(), nullptr);
+            else if (key == "ai_ghost_protection") g_ai_ghost_protection_value = strtof(val.c_str(), nullptr);
+            else if (key == "ai_subpixel_strength") g_ai_subpixel_strength_value = strtof(val.c_str(), nullptr);
+            else if (key == "ai_frequency_detail") g_ai_frequency_detail_value = strtof(val.c_str(), nullptr);
+            else if (key == "ai_edge_sharpen") g_ai_edge_sharpen_value = strtof(val.c_str(), nullptr);
+            else if (key == "ai_luma_chroma") g_ai_luma_chroma_value = strtof(val.c_str(), nullptr);
+            else if (key == "ai_highlight_reconstruction") g_ai_highlight_reconstruction_value = strtof(val.c_str(), nullptr);
+            else if (key == "ai_shadow_recovery") g_ai_shadow_recovery_value = strtof(val.c_str(), nullptr);
+            else if (key == "ai_material_reconstruction") g_ai_material_reconstruction_value = strtof(val.c_str(), nullptr);
+            else if (key == "ai_dynamic_quality") g_ai_dynamic_quality_value = (atoi(val.c_str()) != 0);
+            else if (key == "ai_detail_budget") g_ai_detail_budget_value = strtof(val.c_str(), nullptr);
+            else if (key == "ai_motion_complexity") g_ai_motion_complexity_value = strtof(val.c_str(), nullptr);
             else if (key == "temporal_strength") g_v28_temporal_strength = strtof(val.c_str(), nullptr);
             else if (key == "motion_aware") g_v285_motion_aware_value = (atoi(val.c_str()) != 0);
             else if (key == "motion_threshold") g_v285_motion_threshold_value = strtof(val.c_str(), nullptr);
@@ -638,7 +683,20 @@ static void parse_v27_config() {
             else if (key == "ram_optimization") g_ram_optimization_value = (atoi(val.c_str()) != 0);
             else if (key == "fps_boost") g_fps_boost_value = (atoi(val.c_str()) != 0);
             if (key == "enabled" || key == "logging" || key == "sharpen" || key == "clarity" ||
-                key == "temporal" || key == "temporal_strength" || key == "motion_aware" ||
+                key == "temporal" || key == "ai_low_memory_history" || key == "ai_reconstruction_v6" ||
+                key == "ai_motion_strength" ||
+                key == "ai_reactive_strength" ||
+                key == "ai_ghost_protection" ||
+                key == "ai_subpixel_strength" ||
+                key == "ai_frequency_detail" ||
+                key == "ai_edge_sharpen" ||
+                key == "ai_luma_chroma" ||
+                key == "ai_highlight_reconstruction" ||
+                key == "ai_shadow_recovery" ||
+                key == "ai_material_reconstruction" ||
+                key == "ai_dynamic_quality" ||
+                key == "ai_detail_budget" ||
+                key == "ai_motion_complexity" || key == "temporal_strength" || key == "motion_aware" ||
                 key == "motion_threshold" || key == "motion_softness" || key == "material_detail" ||
                 key == "local_contrast" || key == "highlight_refine" || key == "shadow_refine" ||
                 key == "edge_aware" || key == "edge_strength" || key == "edge_threshold" ||
@@ -867,6 +925,7 @@ static bool v27_init(int width, int height) {
         "uniform sampler2D uTex;"
         "uniform sampler2D uHistoryTex;"
         "uniform vec2 uTexel;"
+        "uniform vec2 uHistoryScale;"
         "uniform float uSharpen;"
         "uniform float uClarity;"
         "uniform float uEnabled;"
@@ -914,6 +973,20 @@ static bool v27_init(int width, int height) {
         "uniform float uAnisotropic;"
         "uniform float uAdaptiveTexture;"
         "uniform float uHDR;"
+        "uniform float u_ai_reconstruction_v6;"
+        "uniform float u_ai_motion_strength;"
+        "uniform float u_ai_reactive_strength;"
+        "uniform float u_ai_ghost_protection;"
+        "uniform float u_ai_subpixel_strength;"
+        "uniform float u_ai_frequency_detail;"
+        "uniform float u_ai_edge_sharpen;"
+        "uniform float u_ai_luma_chroma;"
+        "uniform float u_ai_highlight_reconstruction;"
+        "uniform float u_ai_shadow_recovery;"
+        "uniform float u_ai_material_reconstruction;"
+        "uniform float u_ai_dynamic_quality;"
+        "uniform float u_ai_detail_budget;"
+        "uniform float u_ai_motion_complexity;"
         "varying vec2 vUV;"
         "void main(){"
         " vec4 sampleC=texture2D(uTex,vUV);"
@@ -938,14 +1011,32 @@ static bool v27_init(int width, int height) {
         " float shadowMask=1.0-smoothstep(0.08,0.45,lumC);"
         " float highlightMask=smoothstep(0.55,0.92,lumC);"
         " vec3 materialEnhanced=c+detail*(uClarity+uSharpen*adaptive+uMaterialDetail*edgeMask)*localScale*qualityScale;"
+        " float aiOn=clamp(u_ai_reconstruction_v6,0.0,1.0);"
+        " float aiComplexity=smoothstep(0.004,0.16,edgeRaw+contrast)*clamp(u_ai_motion_complexity,0.0,1.0);"
+        " float aiBudget=mix(1.0,clamp(u_ai_detail_budget,0.1,1.0),aiComplexity);"
+        " float aiQuality=mix(1.0,clamp(u_ai_detail_budget,0.1,1.0),clamp(u_ai_dynamic_quality,0.0,1.0)*aiComplexity);"
+        " vec3 subpixel=(l+r+u+d+c*4.0)/8.0;"
+        " vec3 frequency=c-avg;"
+        " float reactive=smoothstep(0.008,0.12,abs(lumC-lumA)+edgeRaw)*clamp(u_ai_reactive_strength,0.0,1.0);"
+        " float motionProxy=smoothstep(0.006,0.10,abs(lumC-dot(texture2D(uHistoryTex,vUV*uHistoryScale).rgb,vec3(0.2126,0.7152,0.0722))))*clamp(u_ai_motion_strength,0.0,1.0);"
+        " float aiStable=1.0-clamp(max(reactive,motionProxy)*u_ai_ghost_protection,0.0,0.95);"
+        " vec3 aiDetail=detail*clamp(u_ai_frequency_detail,0.0,1.0)+ (subpixel-c)*clamp(u_ai_subpixel_strength,0.0,1.0)+frequency*clamp(u_ai_frequency_detail,0.0,1.0);"
+        " vec3 aiMaterial=aiDetail*clamp(u_ai_material_reconstruction,0.0,1.0)*aiBudget;"
+        " float aiShadow=1.0-smoothstep(0.06,0.42,lumC);"
+        " float aiHighlight=smoothstep(0.58,0.94,lumC);"
+        " vec3 aiColor=c+aiMaterial+detail*(aiShadow*u_ai_shadow_recovery+aiHighlight*u_ai_highlight_reconstruction);"
+        " vec3 aiChroma=aiColor-vec3(dot(aiColor,vec3(0.2126,0.7152,0.0722)));"
+        " aiColor=vec3(dot(aiColor,vec3(0.2126,0.7152,0.0722)))+aiChroma*(1.0+clamp(u_ai_luma_chroma,0.0,1.0)*0.25);"
+        " aiColor+=detail*(clamp(u_ai_edge_sharpen,0.0,0.5)*edgeMask*aiBudget);"
+        " materialEnhanced=mix(materialEnhanced,aiColor,aiOn*aiStable*aiQuality);"
         " materialEnhanced+=detail*(shadowMask*uShadowRefine+highlightMask*uHighlightRefine)*edgeMask*qualityScale;"
         " vec3 edgeEnhanced=materialEnhanced+detail*(uEdgeStrength*edgeMask)*qualityScale;"
         " vec3 enhanced=mix(c,edgeEnhanced,clamp(uReconstruction,0.0,1.0));"
-        " vec3 h=texture2D(uHistoryTex,vUV).rgb;"
-        " vec3 hl=texture2D(uHistoryTex,vUV+vec2(-uTexel.x,0.0)).rgb;"
-        " vec3 hr=texture2D(uHistoryTex,vUV+vec2( uTexel.x,0.0)).rgb;"
-        " vec3 hu=texture2D(uHistoryTex,vUV+vec2(0.0, uTexel.y)).rgb;"
-        " vec3 hd=texture2D(uHistoryTex,vUV+vec2(0.0,-uTexel.y)).rgb;"
+        " vec3 h=texture2D(uHistoryTex,vUV*uHistoryScale).rgb;"
+        " vec3 hl=texture2D(uHistoryTex,(vUV+vec2(-uTexel.x,0.0))*uHistoryScale).rgb;"
+        " vec3 hr=texture2D(uHistoryTex,(vUV+vec2( uTexel.x,0.0))*uHistoryScale).rgb;"
+        " vec3 hu=texture2D(uHistoryTex,(vUV+vec2(0.0, uTexel.y))*uHistoryScale).rgb;"
+        " vec3 hd=texture2D(uHistoryTex,(vUV+vec2(0.0,-uTexel.y))*uHistoryScale).rgb;"
         " vec3 hAvg=(hl+hr+hu+hd)*0.25;"
         " vec3 historyDetail=h-hAvg;"
         " float hLum=dot(h,vec3(0.2126,0.7152,0.0722));"
@@ -1058,6 +1149,7 @@ static bool v27_init(int width, int height) {
     g_v27_pos = 0; g_v27_uv = 1;
     g_v27_tex = glGetUniformLocation(g_v27_program, "uTex");
     g_v27_texel = glGetUniformLocation(g_v27_program, "uTexel");
+    g_v28_history_scale = glGetUniformLocation(g_v27_program, "uHistoryScale");
     g_v27_sharpen = glGetUniformLocation(g_v27_program, "uSharpen");
     g_v27_clarity = glGetUniformLocation(g_v27_program, "uClarity");
     g_v27_enabled = glGetUniformLocation(g_v27_program, "uEnabled");
@@ -1106,6 +1198,20 @@ static bool v27_init(int width, int height) {
     g_v6_anisotropic = glGetUniformLocation(g_v27_program, "uAnisotropic");
     g_v6_adaptive_texture = glGetUniformLocation(g_v27_program, "uAdaptiveTexture");
     g_v6_hdr = glGetUniformLocation(g_v27_program, "uHDR");
+    g_ai_reconstruction_v6_uniform = glGetUniformLocation(g_v27_program, "u_ai_reconstruction_v6");
+    g_ai_motion_strength_uniform = glGetUniformLocation(g_v27_program, "u_ai_motion_strength");
+    g_ai_reactive_strength_uniform = glGetUniformLocation(g_v27_program, "u_ai_reactive_strength");
+    g_ai_ghost_protection_uniform = glGetUniformLocation(g_v27_program, "u_ai_ghost_protection");
+    g_ai_subpixel_strength_uniform = glGetUniformLocation(g_v27_program, "u_ai_subpixel_strength");
+    g_ai_frequency_detail_uniform = glGetUniformLocation(g_v27_program, "u_ai_frequency_detail");
+    g_ai_edge_sharpen_uniform = glGetUniformLocation(g_v27_program, "u_ai_edge_sharpen");
+    g_ai_luma_chroma_uniform = glGetUniformLocation(g_v27_program, "u_ai_luma_chroma");
+    g_ai_highlight_reconstruction_uniform = glGetUniformLocation(g_v27_program, "u_ai_highlight_reconstruction");
+    g_ai_shadow_recovery_uniform = glGetUniformLocation(g_v27_program, "u_ai_shadow_recovery");
+    g_ai_material_reconstruction_uniform = glGetUniformLocation(g_v27_program, "u_ai_material_reconstruction");
+    g_ai_dynamic_quality_uniform = glGetUniformLocation(g_v27_program, "u_ai_dynamic_quality");
+    g_ai_detail_budget_uniform = glGetUniformLocation(g_v27_program, "u_ai_detail_budget");
+    g_ai_motion_complexity_uniform = glGetUniformLocation(g_v27_program, "u_ai_motion_complexity");
 
     glGenTextures(1, &g_v27_texture);
     glBindTexture(GL_TEXTURE_2D, g_v27_texture);
@@ -1456,11 +1562,12 @@ static bool v27_ensure_history() {
     if (!g_v28_temporal_value) return false;
     if (g_v27_width <= 0 || g_v27_height <= 0) return false;
 
-    // Reuse the existing full-resolution history allocation for every frame.
-    // Only recreate it if the module's internal dimensions actually changed.
+    // V6.2 low-memory history stores half-resolution history when enabled.
+    const int history_width = g_ai_low_memory_history_value ? (g_v27_width + 1) / 2 : g_v27_width;
+    const int history_height = g_ai_low_memory_history_value ? (g_v27_height + 1) / 2 : g_v27_height;
     if (g_v28_history_texture && g_v28_history_fbo &&
-        g_v28_history_width == g_v27_width &&
-        g_v28_history_height == g_v27_height) {
+        g_v28_history_width == history_width &&
+        g_v28_history_height == history_height) {
         return true;
     }
 
@@ -1482,7 +1589,7 @@ static bool v27_ensure_history() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_v27_width, g_v27_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, history_width, history_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glGenFramebuffers(1, &g_v28_history_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, g_v28_history_fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_v28_history_texture, 0);
@@ -1497,8 +1604,8 @@ static bool v27_ensure_history() {
         g_v28_history_height = 0;
         return false;
     }
-    g_v28_history_width = g_v27_width;
-    g_v28_history_height = g_v27_height;
+    g_v28_history_width = history_width;
+    g_v28_history_height = history_height;
     g_v28_history_valid = false;
     return true;
 }
@@ -1744,6 +1851,7 @@ static bool v27_process_frame(EGLSurface surface) {
     glUniform1i(g_v27_tex, 0);
     glUniform1i(g_v28_history_tex, 1);
     glUniform2f(g_v27_texel, 1.0f / (float)g_v27_width, 1.0f / (float)g_v27_height);
+    glUniform2f(g_v28_history_scale, g_v28_history_width > 0 ? (float)g_v27_width / (float)g_v28_history_width : 1.0f, g_v28_history_height > 0 ? (float)g_v27_height / (float)g_v28_history_height : 1.0f);
     const bool visual_proof_bypass = g_v26_visual_proof_value && g_v26_visual_proof_bypass;
     if (g_v26_visual_proof_value) {
         if (visual_proof_bypass) ++g_v26_visual_proof_bypass_frames;
@@ -1819,6 +1927,20 @@ static bool v27_process_frame(EGLSurface surface) {
     glUniform1f(g_v6_anisotropic, visual_proof_bypass ? 0.0f : g_v6_anisotropic_value);
     glUniform1f(g_v6_adaptive_texture, visual_proof_bypass ? 0.0f : g_v6_adaptive_texture_value);
     glUniform1f(g_v6_hdr, visual_proof_bypass ? 0.0f : g_v6_hdr_value);
+    glUniform1f(g_ai_reconstruction_v6_uniform, (g_ai_reconstruction_v6_value ? 1.0f : 0.0f));
+    glUniform1f(g_ai_motion_strength_uniform, g_ai_motion_strength_value);
+    glUniform1f(g_ai_reactive_strength_uniform, g_ai_reactive_strength_value);
+    glUniform1f(g_ai_ghost_protection_uniform, g_ai_ghost_protection_value);
+    glUniform1f(g_ai_subpixel_strength_uniform, g_ai_subpixel_strength_value);
+    glUniform1f(g_ai_frequency_detail_uniform, g_ai_frequency_detail_value);
+    glUniform1f(g_ai_edge_sharpen_uniform, g_ai_edge_sharpen_value);
+    glUniform1f(g_ai_luma_chroma_uniform, g_ai_luma_chroma_value);
+    glUniform1f(g_ai_highlight_reconstruction_uniform, g_ai_highlight_reconstruction_value);
+    glUniform1f(g_ai_shadow_recovery_uniform, g_ai_shadow_recovery_value);
+    glUniform1f(g_ai_material_reconstruction_uniform, g_ai_material_reconstruction_value);
+    glUniform1f(g_ai_dynamic_quality_uniform, (g_ai_dynamic_quality_value ? 1.0f : 0.0f));
+    glUniform1f(g_ai_detail_budget_uniform, g_ai_detail_budget_value);
+    glUniform1f(g_ai_motion_complexity_uniform, g_ai_motion_complexity_value);
     glBindBuffer(GL_ARRAY_BUFFER, g_v27_vbo);
     glEnableVertexAttribArray((GLuint)g_v27_pos);
     glEnableVertexAttribArray((GLuint)g_v27_uv);
@@ -1840,12 +1962,12 @@ static bool v27_process_frame(EGLSurface surface) {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_v28_history_fbo);
         if (output_stage_candidate) {
             g_v27_blit_framebuffer(0, 0, g_v27_width, g_v27_height,
-                                   0, 0, g_v27_width, g_v27_height,
+                                   0, 0, g_v28_history_width, g_v28_history_height,
                                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
         } else {
             g_v27_blit_framebuffer(viewport[0], viewport[1],
                                    viewport[0] + viewport[2], viewport[1] + viewport[3],
-                                   0, 0, g_v27_width, g_v27_height,
+                                   0, 0, g_v28_history_width, g_v28_history_height,
                                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
         }
         history_err = glGetError();

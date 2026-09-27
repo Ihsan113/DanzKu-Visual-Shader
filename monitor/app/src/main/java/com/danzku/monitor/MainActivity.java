@@ -61,6 +61,7 @@ public class MainActivity extends Activity {
     TextView saturationValueLabel;
     SeekBar vibranceSeekBar, anisotropicSeekBar, adaptiveTextureSeekBar, hdrSeekBar;
     TextView vibranceValueLabel, anisotropicValueLabel, adaptiveTextureValueLabel, hdrValueLabel;
+    final HashMap<String, ArrayList<View>> dependentControls = new HashMap<>();
 
 
     RenderStats parseRenderStats(String report) {
@@ -193,17 +194,45 @@ public class MainActivity extends Activity {
         targets.setMinHeight(dp(60));
         targets.setOnClickListener(v -> showTargetAppsDialog());
         root.addView(targets);
+        addSectionHeader("PERFORMANCE & RUNTIME");
         addToggle("RAM Optimization", "ram_optimization");
         addToggle("FPS Boost", "fps_boost");
         addToggle("Frame Buffer Optimization", "frame_buffer_optimization");
+
+        addSectionHeader("ANTI-ALIASING & EDGE QUALITY");
         addToggle("Advanced AA", "advanced_aa");
+        addFloatControl("AA Strength", "aa_strength", 0f, 1f, 0.22f, "", "", "%.2f");
+        addToggle("Edge-Aware Processing", "edge_aware");
+        addFloatControl("Edge Strength", "edge_strength", 0f, 1f, 0.10f, "", "", "%.2f");
+
+        addSectionHeader("SHADOWS, LIGHTING & MATERIALS");
         addToggle("Shadow Enhancement", "shadow_enhancement");
+        addFloatControl("Shadow Stability", "shadow_stability", 0f, 1f, 0.22f, "", "", "%.2f");
+        addFloatControl("Shadow Detail Refine", "shadow_refine", 0f, 1f, 0.05f, "", "", "%.2f");
         addToggle("Contact Shadow", "contact_shadow");
         addToggle("AO Enhancement", "ao_enhancement");
         addToggle("Specular Enhancement", "specular_enhancement");
         addToggle("Reflection Approximation", "reflection_approximation");
         addToggle("Lighting Enhancement", "lighting_enhancement");
+        addFloatControl("Highlight Refine", "highlight_refine", 0f, 1f, 0.06f, "", "", "%.2f");
+        addFloatControl("Local Contrast", "local_contrast", 0f, 1f, 0.08f, "", "", "%.2f");
         addToggle("Effect Enhancement", "effect_enhancement");
+        addFloatControl("Material Detail", "material_detail", 0f, 1f, 0.12f, "", "", "%.2f");
+
+        addSectionHeader("TEMPORAL & RECONSTRUCTION");
+        addToggle("Temporal Processing", "temporal");
+        addFloatControl("Temporal Strength", "temporal_strength", 0f, 1f, 0.20f, "", "", "%.2f");
+        addToggle("Temporal Detail Recovery", "temporal_detail_recovery");
+        addFloatControl("Recovery Strength", "recovery_strength", 0f, 1f, 0.12f, "", "", "%.2f");
+        addToggle("Reconstruction Confidence", "reconstruction_confidence");
+        addFloatControl("Confidence Strength", "confidence_strength", 0f, 1f, 0.85f, "", "", "%.2f");
+        addToggle("Neural-Style Reconstruction", "neural_style_reconstruction");
+        addFloatControl("Neural Strength", "neural_strength", 0f, 1f, 0.10f, "", "", "%.2f");
+        addFloatControl("Structure Strength", "structure_strength", 0f, 1f, 0.35f, "", "", "%.2f");
+        addToggle("High-End Reconstruction", "high_end_reconstruction");
+        addFloatControl("High-End Strength", "high_end_strength", 0f, 1f, 0.65f, "", "", "%.2f");
+
+        addSectionHeader("COLOR & TEXTURE");
         addSaturationControl();
         addFloatControl("Vibrance", "vibrance", 0.0f, 1.0f, 0.20f, "vibranceSeekBar", "vibranceValueLabel", "0.00");
         addFloatControl("Anisotropic Visual Enhancement", "anisotropic_enhancement", 0.0f, 16.0f, 0.0f, "anisotropicSeekBar", "anisotropicValueLabel", "0.0");
@@ -213,11 +242,7 @@ public class MainActivity extends Activity {
         addToggle("Visual Proof Bypass", "visual_proof_bypass");
         addToggle("DanzKu File Log", "logging");
 
-        TextView aiHeader = tv("AI++ RECONSTRUCTION V6.0–V6.2");
-        aiHeader.setTextSize(19);
-        aiHeader.setTypeface(null, Typeface.BOLD);
-        aiHeader.setTextColor(Color.rgb(94,53,177));
-        root.addView(aiHeader);
+        addSectionHeader("AI++ RECONSTRUCTION V6.0–V6.2");
         addToggle("AI++ Reconstruction", "ai_reconstruction_v6");
         addFloatControl("Motion Estimation (screen-space)", "ai_motion_strength", 0f, 1f, 0.55f, "", "", "%.2f");
         addFloatControl("Reactive Mask", "ai_reactive_strength", 0f, 1f, 0.35f, "", "", "%.2f");
@@ -499,6 +524,15 @@ public class MainActivity extends Activity {
         root.addView(box);
     }
 
+    void addSectionHeader(String text) {
+        TextView header = tv(text);
+        header.setTextSize(18);
+        header.setTypeface(null, Typeface.BOLD);
+        header.setTextColor(Color.rgb(94, 53, 177));
+        header.setPadding(20, 24, 20, 8);
+        root.addView(header);
+    }
+
     void addFloatControl(String title, String key, float min, float max, float def, String barField, String labelField, String format) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -533,6 +567,8 @@ public class MainActivity extends Activity {
             }
         });
         box.addView(bar);
+        String parentKey = parentForControl(key);
+        if (parentKey != null) dependentControls.computeIfAbsent(parentKey, k -> new ArrayList<>()).add(bar);
         TextView hint = tv("0 = OFF • nilai disimpan ke config dan dikirim ke native bridge");
         hint.setTextSize(12);
         box.addView(hint);
@@ -541,6 +577,37 @@ public class MainActivity extends Activity {
         else if ("anisotropicSeekBar".equals(barField)) { anisotropicSeekBar=bar; anisotropicValueLabel=valueLabel; }
         else if ("adaptiveTextureSeekBar".equals(barField)) { adaptiveTextureSeekBar=bar; adaptiveTextureValueLabel=valueLabel; }
         else if ("hdrSeekBar".equals(barField)) { hdrSeekBar=bar; hdrValueLabel=valueLabel; }
+    }
+
+    String parentForControl(String key) {
+        if (key == null) return null;
+        if (key.startsWith("ai_") && !"ai_dynamic_quality".equals(key)) {
+            if ("ai_detail_budget".equals(key) || "ai_motion_complexity".equals(key)) return "ai_dynamic_quality";
+            return "ai_reconstruction_v6";
+        }
+        if ("aa_strength".equals(key)) return "advanced_aa";
+        if ("temporal_strength".equals(key)) return "temporal";
+        if ("recovery_strength".equals(key)) return "temporal_detail_recovery";
+        if ("confidence_strength".equals(key)) return "reconstruction_confidence";
+        if ("neural_strength".equals(key) || "structure_strength".equals(key)) return "neural_style_reconstruction";
+        if ("high_end_strength".equals(key) || "material_detail".equals(key)) return "high_end_reconstruction";
+        if ("edge_strength".equals(key)) return "edge_aware";
+        if ("shadow_stability".equals(key) || "shadow_refine".equals(key)) return "shadow_enhancement";
+        if ("highlight_refine".equals(key) || "local_contrast".equals(key)) return "lighting_enhancement";
+        if ("vibrance".equals(key) || "saturation".equals(key)) return "enabled";
+        if ("anisotropic_enhancement".equals(key) || "adaptive_texture_enhancement".equals(key) || "hdr_enhancement".equals(key)) return "enabled";
+        return null;
+    }
+
+    void syncDependentControls(String config) {
+        boolean engineOn = isFeatureOn(configValueFromText(config, "enabled"));
+        for (Map.Entry<String, ArrayList<View>> entry : dependentControls.entrySet()) {
+            boolean parentOn = engineOn && isFeatureOn(configValueFromText(config, entry.getKey()));
+            for (View view : entry.getValue()) {
+                view.setEnabled(parentOn);
+                view.setAlpha(parentOn ? 1f : 0.38f);
+            }
+        }
     }
 
     void syncFloatControl(String config, String key, SeekBar bar, TextView label, float min, float max, float def, String format) {
@@ -1087,6 +1154,7 @@ public class MainActivity extends Activity {
         syncFloatControl(config, "anisotropic_enhancement", anisotropicSeekBar, anisotropicValueLabel, 0.0f, 16.0f, 0.0f, "%.1f");
         syncFloatControl(config, "adaptive_texture_enhancement", adaptiveTextureSeekBar, adaptiveTextureValueLabel, 0.0f, 0.50f, 0.15f, "%.2f");
         syncFloatControl(config, "hdr_enhancement", hdrSeekBar, hdrValueLabel, 0.0f, 1.0f, 0.10f, "%.2f");
+        syncDependentControls(config);
     }
 
     void updateOverlayPermissionUi() {

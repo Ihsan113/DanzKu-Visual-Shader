@@ -404,11 +404,6 @@ static GLint g_v6_vibrance = -1;
 static GLint g_v6_anisotropic = -1;
 static GLint g_v6_adaptive_texture = -1;
 static GLint g_v6_hdr = -1;
-static GLint g_ai_reconstruction = -1;
-static GLint g_ai_strength = -1;
-static GLint g_ai_temporal = -1;
-static GLint g_ai_edge_recovery = -1;
-static GLint g_ai_detail_recovery = -1;
 static int g_v27_width = 0;
 static int g_v27_height = 0;
 static volatile EGLint g_v27_last_surface_width = 0;
@@ -479,11 +474,6 @@ static float g_v6_anisotropic_value = 0.0f;
 static bool g_v6_frame_buffer_optimization_value = true;
 static float g_v6_adaptive_texture_value = 0.0f;
 static float g_v6_hdr_value = 0.0f;
-static bool g_ai_reconstruction_value = false;
-static float g_ai_strength_value = 0.14f;
-static float g_ai_temporal_value = 0.18f;
-static float g_ai_edge_recovery_value = 0.20f;
-static float g_ai_detail_recovery_value = 0.14f;
 static bool g_ram_optimization_value = true;
 static bool g_fps_boost_value = true;
 static volatile unsigned long long g_v27_process_calls = 0;
@@ -645,11 +635,6 @@ static void parse_v27_config() {
             else if (key == "frame_buffer_optimization") g_v6_frame_buffer_optimization_value = (atoi(val.c_str()) != 0);
             else if (key == "adaptive_texture_enhancement") g_v6_adaptive_texture_value = strtof(val.c_str(), nullptr);
             else if (key == "hdr_enhancement") g_v6_hdr_value = strtof(val.c_str(), nullptr);
-            else if (key == "ai_reconstruction") g_ai_reconstruction_value = (atoi(val.c_str()) != 0);
-            else if (key == "ai_strength") g_ai_strength_value = strtof(val.c_str(), nullptr);
-            else if (key == "ai_temporal") g_ai_temporal_value = strtof(val.c_str(), nullptr);
-            else if (key == "ai_edge_recovery") g_ai_edge_recovery_value = strtof(val.c_str(), nullptr);
-            else if (key == "ai_detail_recovery") g_ai_detail_recovery_value = strtof(val.c_str(), nullptr);
             else if (key == "ram_optimization") g_ram_optimization_value = (atoi(val.c_str()) != 0);
             else if (key == "fps_boost") g_fps_boost_value = (atoi(val.c_str()) != 0);
             if (key == "enabled" || key == "logging" || key == "sharpen" || key == "clarity" ||
@@ -669,8 +654,6 @@ static void parse_v27_config() {
                 key == "lighting_enhancement" || key == "effect_enhancement" || key == "saturation" ||
                 key == "vibrance" || key == "anisotropic_enhancement" || key == "frame_buffer_optimization" ||
                 key == "adaptive_texture_enhancement" || key == "hdr_enhancement" ||
-                key == "ai_reconstruction" || key == "ai_strength" || key == "ai_temporal" ||
-                key == "ai_edge_recovery" || key == "ai_detail_recovery" ||
                 key == "ram_optimization" || key == "fps_boost") {
                 g_v27_config_parse_success = 1;
             }
@@ -752,14 +735,6 @@ static void parse_v27_config() {
     if (g_v6_adaptive_texture_value > 0.50f) g_v6_adaptive_texture_value = 0.50f;
     if (g_v6_hdr_value < 0.0f) g_v6_hdr_value = 0.0f;
     if (g_v6_hdr_value > 1.0f) g_v6_hdr_value = 1.0f;
-    if (g_ai_strength_value < 0.0f) g_ai_strength_value = 0.0f;
-    if (g_ai_strength_value > 0.35f) g_ai_strength_value = 0.35f;
-    if (g_ai_temporal_value < 0.0f) g_ai_temporal_value = 0.0f;
-    if (g_ai_temporal_value > 0.50f) g_ai_temporal_value = 0.50f;
-    if (g_ai_edge_recovery_value < 0.0f) g_ai_edge_recovery_value = 0.0f;
-    if (g_ai_edge_recovery_value > 0.50f) g_ai_edge_recovery_value = 0.50f;
-    if (g_ai_detail_recovery_value < 0.0f) g_ai_detail_recovery_value = 0.0f;
-    if (g_ai_detail_recovery_value > 0.50f) g_ai_detail_recovery_value = 0.50f;
 }
 
 
@@ -939,11 +914,6 @@ static bool v27_init(int width, int height) {
         "uniform float uAnisotropic;"
         "uniform float uAdaptiveTexture;"
         "uniform float uHDR;"
-        "uniform float uAIReconstruction;"
-        "uniform float uAIStrength;"
-        "uniform float uAITemporal;"
-        "uniform float uAIEdgeRecovery;"
-        "uniform float uAIDetailRecovery;"
         "varying vec2 vUV;"
         "void main(){"
         " vec4 sampleC=texture2D(uTex,vUV);"
@@ -1034,21 +1004,7 @@ static bool v27_init(int width, int height) {
         " float recoveryWeight=uTemporalRecovery*uRecoveryStrength*temporalConfidence*reconstructionConfidence;"
         " vec3 recoveredHistory=clamp(h+historyDetail*recoveryWeight,vec3(0.0),vec3(1.0));"
         " float temporalWeight=uTemporal*uHistoryValid*temporalConfidence*reconstructionConfidence*mix(1.0,motionConfidence,uMotionAware);"
-        " vec3 aiRing=(l+r+u+d)*0.25;"
-        " vec3 aiDiag=(wideDiagA+wideDiagB)*0.5;"
-        " float aiLumaRing=dot(aiRing,vec3(0.2126,0.7152,0.0722));"
-        " float aiLumaDiag=dot(aiDiag,vec3(0.2126,0.7152,0.0722));"
-        " float aiEdge=smoothstep(0.004,0.080,abs(lumC-aiLumaRing)+0.35*abs(lumC-aiLumaDiag));"
-        " float aiMotionGate=1.0-smoothstep(uMotionThreshold,uMotionThreshold+uMotionSoftness,localMotion);"
-        " float aiConfidence=clamp(reconstructionConfidence*mix(1.0,aiMotionGate,uMotionAware),0.0,1.0);"
-        " vec3 aiSpatialDetail=(c-aiRing)*(0.65+0.35*aiEdge)+(c-aiDiag)*0.35;"
-        " vec3 aiTemporalDetail=recoveredHistory-c;"
-        " float aiWeight=clamp(uAIReconstruction*uAIStrength*aiConfidence*(0.65+0.35*qualityScale),0.0,0.35);"
-        " vec3 aiReconstructed=v5Color+aiSpatialDetail*(uAIEdgeRecovery*aiEdge)+aiTemporalDetail*(uAITemporal*aiConfidence);"
-        " aiReconstructed+=multiScaleDetail*(uAIDetailRecovery*aiConfidence*aiEdge);"
-        " aiReconstructed=clamp(aiReconstructed,vec3(0.0),vec3(1.0));"
-        " vec3 aiColor=mix(v5Color,aiReconstructed,aiWeight);"
-        " vec3 temporalColor=mix(aiColor,recoveredHistory,temporalWeight);"
+        " vec3 temporalColor=mix(v5Color,recoveredHistory,temporalWeight);"
         " float finalLum=dot(temporalColor,vec3(0.2126,0.7152,0.0722));"
         " vec3 saturationColor=finalLum+(temporalColor-vec3(finalLum))*uSaturation;"
         " float vmax=max(max(temporalColor.r,temporalColor.g),temporalColor.b);"
@@ -1150,11 +1106,6 @@ static bool v27_init(int width, int height) {
     g_v6_anisotropic = glGetUniformLocation(g_v27_program, "uAnisotropic");
     g_v6_adaptive_texture = glGetUniformLocation(g_v27_program, "uAdaptiveTexture");
     g_v6_hdr = glGetUniformLocation(g_v27_program, "uHDR");
-    g_ai_reconstruction = glGetUniformLocation(g_v27_program, "uAIReconstruction");
-    g_ai_strength = glGetUniformLocation(g_v27_program, "uAIStrength");
-    g_ai_temporal = glGetUniformLocation(g_v27_program, "uAITemporal");
-    g_ai_edge_recovery = glGetUniformLocation(g_v27_program, "uAIEdgeRecovery");
-    g_ai_detail_recovery = glGetUniformLocation(g_v27_program, "uAIDetailRecovery");
 
     glGenTextures(1, &g_v27_texture);
     glBindTexture(GL_TEXTURE_2D, g_v27_texture);
@@ -1466,11 +1417,6 @@ static void v27_write_runtime_report() {
     out += "frame_buffer_optimization=" + std::to_string(g_v6_frame_buffer_optimization_value ? 1 : 0) + "\n";
     out += "adaptive_texture_enhancement=" + std::to_string(g_v6_adaptive_texture_value) + "\n";
     out += "hdr_enhancement=" + std::to_string(g_v6_hdr_value) + "\n";
-    out += "ai_reconstruction=" + std::to_string(g_ai_reconstruction_value ? 1 : 0) + "\n";
-    out += "ai_strength=" + std::to_string(g_ai_strength_value) + "\n";
-    out += "ai_temporal=" + std::to_string(g_ai_temporal_value) + "\n";
-    out += "ai_edge_recovery=" + std::to_string(g_ai_edge_recovery_value) + "\n";
-    out += "ai_detail_recovery=" + std::to_string(g_ai_detail_recovery_value) + "\n";
 
     const std::string base = g_app_files_dir + "/danzku_v40_runtime_" + std::to_string((int)getpid());
     // Keep the existing .txt as the latest snapshot.
@@ -1873,11 +1819,6 @@ static bool v27_process_frame(EGLSurface surface) {
     glUniform1f(g_v6_anisotropic, visual_proof_bypass ? 0.0f : g_v6_anisotropic_value);
     glUniform1f(g_v6_adaptive_texture, visual_proof_bypass ? 0.0f : g_v6_adaptive_texture_value);
     glUniform1f(g_v6_hdr, visual_proof_bypass ? 0.0f : g_v6_hdr_value);
-    glUniform1f(g_ai_reconstruction, visual_proof_bypass ? 0.0f : (g_ai_reconstruction_value ? 1.0f : 0.0f));
-    glUniform1f(g_ai_strength, visual_proof_bypass ? 0.0f : g_ai_strength_value);
-    glUniform1f(g_ai_temporal, visual_proof_bypass ? 0.0f : g_ai_temporal_value);
-    glUniform1f(g_ai_edge_recovery, visual_proof_bypass ? 0.0f : g_ai_edge_recovery_value);
-    glUniform1f(g_ai_detail_recovery, visual_proof_bypass ? 0.0f : g_ai_detail_recovery_value);
     glBindBuffer(GL_ARRAY_BUFFER, g_v27_vbo);
     glEnableVertexAttribArray((GLuint)g_v27_pos);
     glEnableVertexAttribArray((GLuint)g_v27_uv);

@@ -164,7 +164,6 @@ public class MainActivity extends Activity {
         defaultStrengths.put("logging", "1");
         defaultStrengths.put("ram_optimization", "1");
         defaultStrengths.put("fps_boost", "1");
-        defaultStrengths.put("ai_reconstruction", "1");
     }
 
     int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
@@ -193,7 +192,6 @@ public class MainActivity extends Activity {
         root.addView(targets);
         addToggle("RAM Optimization", "ram_optimization");
         addToggle("FPS Boost", "fps_boost");
-        addToggle("AI++ Reconstruction (DLSS-like style, unofficial)", "ai_reconstruction");
         addToggle("Frame Buffer Optimization", "frame_buffer_optimization");
         addToggle("Advanced AA", "advanced_aa");
         addToggle("Shadow Enhancement", "shadow_enhancement");
@@ -995,7 +993,7 @@ public class MainActivity extends Activity {
             sb.append("ENGINE SYNC: WAITING FOR NATIVE RUNTIME\n");
         }
         sb.append("\nRuntime feature status:\n");
-        for (String key : new String[]{"enabled","advanced_aa","shadow_enhancement","contact_shadow","ao_enhancement","specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement","visual_proof","visual_proof_bypass","logging","ai_reconstruction"}) {
+        for (String key : new String[]{"enabled","advanced_aa","shadow_enhancement","contact_shadow","ao_enhancement","specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement","visual_proof","visual_proof_bypass","logging"}) {
             String v=value(st.report,key); sb.append(key).append(": ").append(v==null?"--":featureState(v)).append("\n");
         }
         String saturation = configValueFromText(config, "saturation");
@@ -1011,7 +1009,7 @@ public class MainActivity extends Activity {
 
     String pendingFeatures(String report, String config) {
         StringBuilder out=new StringBuilder();
-        String[] keys={"enabled","advanced_aa","shadow_enhancement","contact_shadow","ao_enhancement","specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement","visual_proof","visual_proof_bypass","logging","ai_reconstruction"};
+        String[] keys={"enabled","advanced_aa","shadow_enhancement","contact_shadow","ao_enhancement","specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement","visual_proof","visual_proof_bypass","logging"};
         for(String key:keys){
             String c=configValueFromText(config,key), r=value(report,key);
             if(c!=null && r!=null && isFeatureOn(c)!=isFeatureOn(r)){

@@ -419,6 +419,51 @@ static GLint g_ai_material_reconstruction_uniform = -1;
 static GLint g_ai_dynamic_quality_uniform = -1;
 static GLint g_ai_detail_budget_uniform = -1;
 static GLint g_ai_motion_complexity_uniform = -1;
+static GLint g_v9_reconstruction_uniform = -1;
+static GLint g_v9_reprojection_uniform = -1;
+static GLint g_v9_depth_proxy_uniform = -1;
+static GLint g_v9_history_clip_uniform = -1;
+static GLint g_v9_responsive_uniform = -1;
+static GLint g_v10_antishimmer_uniform = -1;
+static GLint g_v10_shimmer_strength_uniform = -1;
+static GLint g_v10_stability_threshold_uniform = -1;
+static GLint g_v10_stability_softness_uniform = -1;
+static GLint g_v10_edge_protection_uniform = -1;
+static GLint g_v11_detail_preservation_uniform = -1;
+static GLint g_v11_ghost_rejection_uniform = -1;
+static GLint g_v11_detail_threshold_uniform = -1;
+static GLint g_v11_detail_softness_uniform = -1;
+static GLint g_v11_color_clip_uniform = -1;
+static GLint g_v12_motion_handling_uniform = -1;
+static GLint g_v12_camera_motion_uniform = -1;
+static GLint g_v12_motion_softness_uniform = -1;
+static GLint g_v12_motion_threshold_uniform = -1;
+static GLint g_v12_history_response_uniform = -1;
+static GLint g_v12_motion_detail_preservation_uniform = -1;
+static GLint g_poco_m5_tuning_uniform = -1;
+static GLint g_poco_m5_quality_scale_uniform = -1;
+static GLint g_poco_m5_history_scale_uniform = -1;
+static GLint g_poco_m5_detail_budget_uniform = -1;
+static GLint g_poco_m5_temporal_response_uniform = -1;
+static GLint g_poco_m5_motion_cost_uniform = -1;
+
+static bool g_v12_motion_handling_value = true;
+static float g_v12_camera_motion_value = 0.65f;
+static float g_v12_motion_softness_value = 0.12f;
+static float g_v12_motion_threshold_value = 0.025f;
+static float g_v12_history_response_value = 0.75f;
+static float g_v12_motion_detail_preservation_value = 0.80f;
+static bool g_v11_detail_preservation_value = true;
+static float g_v11_ghost_rejection_value = 0.72f;
+static float g_v11_detail_threshold_value = 0.018f;
+static float g_v11_detail_softness_value = 0.055f;
+static float g_v11_color_clip_value = 0.75f;
+static bool g_poco_m5_tuning_value = true;
+static float g_poco_m5_quality_scale_value = 0.82f;
+static float g_poco_m5_history_scale_value = 0.75f;
+static float g_poco_m5_detail_budget_value = 0.72f;
+static float g_poco_m5_temporal_response_value = 0.88f;
+static float g_poco_m5_motion_cost_value = 0.82f;
 static int g_v27_width = 0;
 static int g_v27_height = 0;
 static volatile EGLint g_v27_last_surface_width = 0;
@@ -460,6 +505,17 @@ static float g_ai_material_reconstruction_value = 0.18f;
 static bool g_ai_dynamic_quality_value = 1;
 static float g_ai_detail_budget_value = 0.8f;
 static float g_ai_motion_complexity_value = 0.55f;
+static bool g_v9_reconstruction_value = true;
+static float g_v9_reprojection_value = 0.55f;
+static float g_v9_depth_proxy_value = 0.45f;
+static float g_v9_history_clip_value = 0.60f;
+static float g_v9_responsive_value = 0.35f;
+static bool g_v10_antishimmer_value = true;
+static float g_v10_shimmer_strength_value = 0.60f;
+static float g_v10_stability_threshold_value = 0.018f;
+static float g_v10_stability_softness_value = 0.060f;
+static float g_v10_edge_protection_value = 0.75f;
+
 static float g_v28_temporal_strength = 0.20f;
 static bool g_v285_motion_aware_value = true;
 static float g_v285_motion_threshold_value = 0.020f;
@@ -633,6 +689,11 @@ static void parse_v27_config() {
             else if (key == "ai_dynamic_quality") g_ai_dynamic_quality_value = (atoi(val.c_str()) != 0);
             else if (key == "ai_detail_budget") g_ai_detail_budget_value = strtof(val.c_str(), nullptr);
             else if (key == "ai_motion_complexity") g_ai_motion_complexity_value = strtof(val.c_str(), nullptr);
+            else if (key == "v9_reconstruction") g_v9_reconstruction_value = (atoi(val.c_str()) != 0);
+            else if (key == "v9_reprojection") g_v9_reprojection_value = strtof(val.c_str(), nullptr);
+            else if (key == "v9_depth_proxy") g_v9_depth_proxy_value = strtof(val.c_str(), nullptr);
+            else if (key == "v9_history_clip") g_v9_history_clip_value = strtof(val.c_str(), nullptr);
+            else if (key == "v9_responsive") g_v9_responsive_value = strtof(val.c_str(), nullptr);
             else if (key == "temporal_strength") g_v28_temporal_strength = strtof(val.c_str(), nullptr);
             else if (key == "motion_aware") g_v285_motion_aware_value = (atoi(val.c_str()) != 0);
             else if (key == "motion_threshold") g_v285_motion_threshold_value = strtof(val.c_str(), nullptr);
@@ -682,6 +743,28 @@ static void parse_v27_config() {
             else if (key == "hdr_enhancement") g_v6_hdr_value = strtof(val.c_str(), nullptr);
             else if (key == "ram_optimization") g_ram_optimization_value = (atoi(val.c_str()) != 0);
             else if (key == "fps_boost") g_fps_boost_value = (atoi(val.c_str()) != 0);
+            else if (key == "v10_antishimmer") g_v10_antishimmer_value = (atoi(val.c_str()) != 0);
+            else if (key == "v10_shimmer_strength") g_v10_shimmer_strength_value = strtof(val.c_str(), nullptr);
+            else if (key == "v10_stability_threshold") g_v10_stability_threshold_value = strtof(val.c_str(), nullptr);
+            else if (key == "v10_stability_softness") g_v10_stability_softness_value = strtof(val.c_str(), nullptr);
+            else if (key == "v10_edge_protection") g_v10_edge_protection_value = strtof(val.c_str(), nullptr);
+            else if (key == "v11_detail_preservation") g_v11_detail_preservation_value = (atoi(val.c_str()) != 0);
+            else if (key == "v11_ghost_rejection") g_v11_ghost_rejection_value = strtof(val.c_str(), nullptr);
+            else if (key == "v11_detail_threshold") g_v11_detail_threshold_value = strtof(val.c_str(), nullptr);
+            else if (key == "v11_detail_softness") g_v11_detail_softness_value = strtof(val.c_str(), nullptr);
+            else if (key == "v11_color_clip") g_v11_color_clip_value = strtof(val.c_str(), nullptr);
+            else if (key == "v12_motion_handling") g_v12_motion_handling_value = (atoi(val.c_str()) != 0);
+            else if (key == "v12_camera_motion") g_v12_camera_motion_value = strtof(val.c_str(), nullptr);
+            else if (key == "v12_motion_softness") g_v12_motion_softness_value = strtof(val.c_str(), nullptr);
+            else if (key == "v12_motion_threshold") g_v12_motion_threshold_value = strtof(val.c_str(), nullptr);
+            else if (key == "v12_history_response") g_v12_history_response_value = strtof(val.c_str(), nullptr);
+            else if (key == "v12_motion_detail_preservation") g_v12_motion_detail_preservation_value = strtof(val.c_str(), nullptr);
+            else if (key == "poco_m5_tuning") g_poco_m5_tuning_value = (atoi(val.c_str()) != 0);
+            else if (key == "poco_m5_quality_scale") g_poco_m5_quality_scale_value = strtof(val.c_str(), nullptr);
+            else if (key == "poco_m5_history_scale") g_poco_m5_history_scale_value = strtof(val.c_str(), nullptr);
+            else if (key == "poco_m5_detail_budget") g_poco_m5_detail_budget_value = strtof(val.c_str(), nullptr);
+            else if (key == "poco_m5_temporal_response") g_poco_m5_temporal_response_value = strtof(val.c_str(), nullptr);
+            else if (key == "poco_m5_motion_cost") g_poco_m5_motion_cost_value = strtof(val.c_str(), nullptr);
             if (key == "enabled" || key == "logging" || key == "sharpen" || key == "clarity" ||
                 key == "temporal" || key == "ai_low_memory_history" || key == "ai_reconstruction_v6" ||
                 key == "ai_motion_strength" ||
@@ -696,7 +779,9 @@ static void parse_v27_config() {
                 key == "ai_material_reconstruction" ||
                 key == "ai_dynamic_quality" ||
                 key == "ai_detail_budget" ||
-                key == "ai_motion_complexity" || key == "temporal_strength" || key == "motion_aware" ||
+                key == "ai_motion_complexity" || key == "v9_reconstruction" || key == "v9_reprojection" ||
+                key == "v9_depth_proxy" || key == "v9_history_clip" || key == "v9_responsive" ||
+                key == "temporal_strength" || key == "motion_aware" ||
                 key == "motion_threshold" || key == "motion_softness" || key == "material_detail" ||
                 key == "local_contrast" || key == "highlight_refine" || key == "shadow_refine" ||
                 key == "edge_aware" || key == "edge_strength" || key == "edge_threshold" ||
@@ -722,6 +807,14 @@ static void parse_v27_config() {
     if (g_v27_sharpen_value > 0.50f) g_v27_sharpen_value = 0.50f;
     if (g_v27_clarity_value < 0.0f) g_v27_clarity_value = 0.0f;
     if (g_v27_clarity_value > 0.30f) g_v27_clarity_value = 0.30f;
+    if (g_v9_reprojection_value < 0.0f) g_v9_reprojection_value = 0.0f;
+    if (g_v9_reprojection_value > 1.0f) g_v9_reprojection_value = 1.0f;
+    if (g_v9_depth_proxy_value < 0.0f) g_v9_depth_proxy_value = 0.0f;
+    if (g_v9_depth_proxy_value > 1.0f) g_v9_depth_proxy_value = 1.0f;
+    if (g_v9_history_clip_value < 0.0f) g_v9_history_clip_value = 0.0f;
+    if (g_v9_history_clip_value > 1.0f) g_v9_history_clip_value = 1.0f;
+    if (g_v9_responsive_value < 0.0f) g_v9_responsive_value = 0.0f;
+    if (g_v9_responsive_value > 1.0f) g_v9_responsive_value = 1.0f;
     if (g_v28_temporal_strength < 0.0f) g_v28_temporal_strength = 0.0f;
     if (g_v28_temporal_strength > 0.50f) g_v28_temporal_strength = 0.50f;
     if (g_v285_motion_threshold_value < 0.0f) g_v285_motion_threshold_value = 0.0f;
@@ -877,22 +970,49 @@ static void cleanup_danzku_files() {
     closedir(dir);
 }
 
+static std::string g_v27_init_stage;
+static std::string g_v27_shader_log;
+static GLenum g_v27_init_gl_error = GL_NO_ERROR;
+
+static void v27_set_init_diag(const char* stage,
+                              const std::string& log = std::string(),
+                              GLenum err = GL_NO_ERROR) {
+    g_v27_init_stage = stage ? stage : "";
+    g_v27_shader_log = log;
+    g_v27_init_gl_error = err;
+}
+
 static GLuint v27_compile_shader(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
-    if (!shader) return 0;
+    if (!shader) {
+        v27_set_init_diag(type == GL_FRAGMENT_SHADER ? "fragment_create" : "vertex_create",
+                          "", glGetError());
+        return 0;
+    }
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
     GLint ok = GL_FALSE;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
     if (ok != GL_TRUE) {
+        char info[4096] = {};
+        GLsizei len = 0;
+        glGetShaderInfoLog(shader, sizeof(info) - 1, &len, info);
+        if (len < 0) len = 0;
+        if (len >= static_cast<GLsizei>(sizeof(info))) len = static_cast<GLsizei>(sizeof(info) - 1);
+        info[len] = '\0';
+        const GLenum err = glGetError();
+        v27_set_init_diag(type == GL_FRAGMENT_SHADER ? "fragment_compile" : "vertex_compile",
+                          std::string(info), err);
         glDeleteShader(shader);
         return 0;
     }
+    v27_set_init_diag(type == GL_FRAGMENT_SHADER ? "fragment_compile_ok" : "vertex_compile_ok");
     return shader;
 }
 
 static bool v27_init(int width, int height) {
     pthread_mutex_lock(&g_v27_mutex);
+    v27_set_init_diag("enter");
     if (g_v27_initialized) { pthread_mutex_unlock(&g_v27_mutex); return true; }
     if (g_v27_failed || width <= 0 || height <= 0) { pthread_mutex_unlock(&g_v27_mutex); return false; }
     parse_v27_config();
@@ -911,9 +1031,12 @@ static bool v27_init(int width, int height) {
     g_v27_width = width;
     g_v27_height = height;
     if (!g_v27_enabled_value) {
+        v27_set_init_diag("disabled");
         pthread_mutex_unlock(&g_v27_mutex);
         return false;
     }
+
+    v27_set_init_diag("compile_start");
 
     static const char* vs =
         "attribute vec2 aPos;"
@@ -987,6 +1110,33 @@ static bool v27_init(int width, int height) {
         "uniform float u_ai_dynamic_quality;"
         "uniform float u_ai_detail_budget;"
         "uniform float u_ai_motion_complexity;"
+        "uniform float u_v9_reconstruction;"
+        "uniform float u_v9_reprojection;"
+        "uniform float u_v9_depth_proxy;"
+        "uniform float u_v9_history_clip;"
+        "uniform float u_v9_responsive;"
+        "uniform float u_v10_antishimmer;"
+        "uniform float u_v10_shimmer_strength;"
+        "uniform float u_v10_stability_threshold;"
+        "uniform float u_v10_stability_softness;"
+        "uniform float u_v10_edge_protection;"
+        "uniform float u_v11_detail_preservation;"
+        "uniform float u_v11_ghost_rejection;"
+        "uniform float u_v11_detail_threshold;"
+        "uniform float u_v11_detail_softness;"
+        "uniform float u_v11_color_clip;"
+        "uniform float u_v12_motion_handling;"
+        "uniform float u_v12_camera_motion;"
+        "uniform float u_v12_motion_softness;"
+        "uniform float u_v12_motion_threshold;"
+        "uniform float u_v12_history_response;"
+        "uniform float u_v12_motion_detail_preservation;"
+        "uniform float u_poco_m5_tuning;"
+        "uniform float u_poco_m5_quality_scale;"
+        "uniform float u_poco_m5_history_scale;"
+        "uniform float u_poco_m5_detail_budget;"
+        "uniform float u_poco_m5_temporal_response;"
+        "uniform float u_poco_m5_motion_cost;"
         "varying vec2 vUV;"
         "void main(){"
         " vec4 sampleC=texture2D(uTex,vUV);"
@@ -1007,10 +1157,14 @@ static bool v27_init(int width, int height) {
         " float edgeMask=smoothstep(uEdgeThreshold,uEdgeThreshold+uEdgeSoftness,edgeRaw)*uEdgeAware;"
         " float complexity=smoothstep(0.008,0.12,0.55*contrast+0.45*edgeRaw);"
         " float qualityScale=mix(1.0,mix(uQualityMin,uQualityMax,complexity),clamp(uDynamicQuality,0.0,1.0));"
+        " float deviceTuning=clamp(u_poco_m5_tuning,0.0,1.0);"
+        " float deviceScale=mix(1.0,clamp(u_poco_m5_quality_scale,0.55,1.0),deviceTuning);"
+        " float deviceDetailBudget=mix(1.0,clamp(u_poco_m5_detail_budget,0.45,1.0),deviceTuning);"
+        " qualityScale*=deviceScale;"
         " float localScale=1.0+uLocalContrast*edgeMask;"
         " float shadowMask=1.0-smoothstep(0.08,0.45,lumC);"
         " float highlightMask=smoothstep(0.55,0.92,lumC);"
-        " vec3 materialEnhanced=c+detail*(uClarity+uSharpen*adaptive+uMaterialDetail*edgeMask)*localScale*qualityScale;"
+        " vec3 materialEnhanced=c+detail*(uClarity+uSharpen*adaptive+uMaterialDetail*edgeMask)*localScale*qualityScale*deviceDetailBudget;"
         " float aiOn=clamp(u_ai_reconstruction_v6,0.0,1.0);"
         " float aiComplexity=smoothstep(0.004,0.16,edgeRaw+contrast)*clamp(u_ai_motion_complexity,0.0,1.0);"
         " float aiBudget=mix(1.0,clamp(u_ai_detail_budget,0.1,1.0),aiComplexity);"
@@ -1095,7 +1249,57 @@ static bool v27_init(int width, int height) {
         " float recoveryWeight=uTemporalRecovery*uRecoveryStrength*temporalConfidence*reconstructionConfidence;"
         " vec3 recoveredHistory=clamp(h+historyDetail*recoveryWeight,vec3(0.0),vec3(1.0));"
         " float temporalWeight=uTemporal*uHistoryValid*temporalConfidence*reconstructionConfidence*mix(1.0,motionConfidence,uMotionAware);"
-        " vec3 temporalColor=mix(v5Color,recoveredHistory,temporalWeight);"
+        " float historySpatialDiff=length(h-hAvg);"
+        " float currentSpatialDiff=length(c-avg);"
+        " float spatialMismatch=abs(currentSpatialDiff-historySpatialDiff);"
+        " float temporalInstability=smoothstep(u_v10_stability_threshold,u_v10_stability_threshold+u_v10_stability_softness,temporalDiff+0.5*spatialMismatch);"
+        " float stableRegion=1.0-temporalInstability;"
+        " float shimmerSignal=smoothstep(0.004,0.035,spatialMismatch+0.35*abs(edgeRaw-(abs(dot(h,vec3(0.2126,0.7152,0.0722))-hLumAvg))));"
+        " float edgeProtection=1.0-clamp(shimmerSignal*u_v10_edge_protection*edgeMask,0.0,0.90);"
+        " float v10TemporalGate=mix(1.0,stableRegion,clamp(u_v10_antishimmer,0.0,1.0)*clamp(u_v10_shimmer_strength,0.0,1.0));"
+        " v10TemporalGate*=edgeProtection;"
+        " float l0=dot(l,vec3(0.2126,0.7152,0.0722));"
+        " float r0=dot(r,vec3(0.2126,0.7152,0.0722));"
+        " float u0=dot(u,vec3(0.2126,0.7152,0.0722));"
+        " float d0=dot(d,vec3(0.2126,0.7152,0.0722));"
+        " float depthProxy=clamp((abs(lumC-l0)+abs(lumC-r0)+abs(lumC-u0)+abs(lumC-d0))*4.0,0.0,1.0);"
+        " vec3 hMin=min(min(hl,hr),min(hu,hd));"
+        " vec3 hMax=max(max(hl,hr),max(hu,hd));"
+        " vec3 clippedHistory=clamp(h,mix(vec3(0.0),hMin,u_v9_history_clip),mix(vec3(1.0),hMax,u_v9_history_clip));"
+        " float reactiveGate=1.0-smoothstep(0.03,0.20,depthProxy*u_v9_depth_proxy);"
+        " float reprojectionBlend=clamp(u_v9_reprojection*(0.65+0.35*reactiveGate)*(1.0-u_v9_responsive*depthProxy),0.0,1.0);"
+        " float deviceHistoryScale=mix(1.0,clamp(u_poco_m5_history_scale,0.50,1.0),deviceTuning);"
+        " float deviceTemporalResponse=mix(1.0,clamp(u_poco_m5_temporal_response,0.55,1.0),deviceTuning);"
+        " float deviceMotionCost=mix(1.0,clamp(u_poco_m5_motion_cost,0.55,1.0),deviceTuning);"
+        " vec3 temporalHistory=mix(h,clippedHistory,reprojectionBlend*deviceHistoryScale);"
+        " temporalHistory=mix(h,temporalHistory,deviceTemporalResponse);"
+        " motionTemporalGate=mix(1.0,motionTemporalGate,deviceMotionCost);"
+        " float motionDelta=localMotion;"
+        " float motionLevel=smoothstep(u_v12_motion_threshold,u_v12_motion_threshold+u_v12_motion_softness,motionDelta);"
+        " float cameraMotionGate=smoothstep(0.008,0.12,abs(lumC-hLum)+edgeRaw*0.50)*clamp(u_v12_camera_motion,0.0,1.0);"
+        " float motionConfidenceGate=1.0-motionLevel;"
+        " float motionHistoryWeight=clamp(u_v12_history_response*(0.35+0.65*motionConfidenceGate),0.10,1.0);"
+        " float motionDetailGate=mix(1.0,0.55,clamp(motionLevel*u_v12_motion_detail_preservation,0.0,1.0));"
+        " float motionTemporalGate=mix(1.0,motionHistoryWeight,clamp(u_v12_motion_handling,0.0,1.0));"
+        " motionTemporalGate*=mix(1.0,0.75,cameraMotionGate*motionLevel);"
+        " float motionV11Weight=clamp(v9Weight*motionTemporalGate,0.0,1.0);"
+        " float v9Weight=clamp(u_v9_reconstruction*temporalWeight*v10TemporalGate,0.0,1.0);"
+        " float detailSignal=length(detail);"
+        " float historyDetailSignal=length(historyDetail);"
+        " float detailAgreement=1.0-smoothstep(u_v11_detail_threshold,u_v11_detail_threshold+u_v11_detail_softness,abs(detailSignal-historyDetailSignal));"
+        " float colorDelta=length(enhanced-h);"
+        " float ghostSignal=smoothstep(0.012,0.090,colorDelta+0.35*temporalDiff);"
+        " float ghostReject=mix(1.0,1.0-ghostSignal,clamp(u_v11_ghost_rejection,0.0,1.0));"
+        " float detailGate=mix(1.0,detailAgreement,clamp(u_v11_detail_preservation,0.0,1.0));"
+        " float v11Weight=clamp(motionV11Weight*ghostReject,0.0,1.0);"
+        " float motionProtectedDetail=mix(1.0,motionDetailGate,clamp(u_v12_motion_detail_preservation,0.0,1.0));"
+        " vec3 temporalColor=mix(v5Color,temporalHistory,v11Weight);"
+        " vec3 protectedDetail=detail*(0.55+0.45*detailGate)*motionProtectedDetail;"
+        " temporalColor=mix(temporalColor,clamp(temporalColor+protectedDetail*0.10,vec3(0.0),vec3(1.0)),clamp(u_v11_detail_preservation*detailGate,0.0,1.0));"
+        " vec3 centerBoundMin=min(c,hMin);"
+        " vec3 centerBoundMax=max(c,hMax);"
+        " vec3 clippedTemporal=clamp(temporalColor,mix(vec3(0.0),centerBoundMin,u_v11_color_clip),mix(vec3(1.0),centerBoundMax,u_v11_color_clip));"
+        " temporalColor=mix(temporalColor,clippedTemporal,clamp(u_v11_ghost_rejection*0.35,0.0,0.35));"
         " float finalLum=dot(temporalColor,vec3(0.2126,0.7152,0.0722));"
         " vec3 saturationColor=finalLum+(temporalColor-vec3(finalLum))*uSaturation;"
         " float vmax=max(max(temporalColor.r,temporalColor.g),temporalColor.b);"
@@ -1124,11 +1328,20 @@ static bool v27_init(int width, int height) {
         " gl_FragColor=vec4(mix(c,hdrColor,uEnabled),sampleC.a);"
         "}";
 
+    g_v27_shader_log.clear();
+    g_v27_init_gl_error = GL_NO_ERROR;
     GLuint v = v27_compile_shader(GL_VERTEX_SHADER, vs);
-    GLuint f = v27_compile_shader(GL_FRAGMENT_SHADER, fs);
-    if (!v || !f) {
-        if (v) glDeleteShader(v); if (f) glDeleteShader(f);
+    if (!v) {
         g_v27_failed = true;
+        v27_write_runtime_report();
+        pthread_mutex_unlock(&g_v27_mutex);
+        return false;
+    }
+    GLuint f = v27_compile_shader(GL_FRAGMENT_SHADER, fs);
+    if (!f) {
+        glDeleteShader(v);
+        g_v27_failed = true;
+        v27_write_runtime_report();
         pthread_mutex_unlock(&g_v27_mutex);
         return false;
     }
@@ -1141,11 +1354,20 @@ static bool v27_init(int width, int height) {
     GLint linked = GL_FALSE;
     glGetProgramiv(g_v27_program, GL_LINK_STATUS, &linked);
     if (linked != GL_TRUE) {
+        char info[4096] = {};
+        GLsizei len = 0;
+        glGetProgramInfoLog(g_v27_program, sizeof(info) - 1, &len, info);
+        if (len < 0) len = 0;
+        if (len >= static_cast<GLsizei>(sizeof(info))) len = static_cast<GLsizei>(sizeof(info) - 1);
+        info[len] = '\0';
+        v27_set_init_diag("program_link", std::string(info), glGetError());
         glDeleteProgram(g_v27_program); g_v27_program = 0;
         g_v27_failed = true;
+        v27_write_runtime_report();
         pthread_mutex_unlock(&g_v27_mutex);
         return false;
     }
+    v27_set_init_diag("program_link_ok");
     g_v27_pos = 0; g_v27_uv = 1;
     g_v27_tex = glGetUniformLocation(g_v27_program, "uTex");
     g_v27_texel = glGetUniformLocation(g_v27_program, "uTexel");
@@ -1212,6 +1434,34 @@ static bool v27_init(int width, int height) {
     g_ai_dynamic_quality_uniform = glGetUniformLocation(g_v27_program, "u_ai_dynamic_quality");
     g_ai_detail_budget_uniform = glGetUniformLocation(g_v27_program, "u_ai_detail_budget");
     g_ai_motion_complexity_uniform = glGetUniformLocation(g_v27_program, "u_ai_motion_complexity");
+    g_v9_reconstruction_uniform = glGetUniformLocation(g_v27_program, "u_v9_reconstruction");
+    g_v9_reprojection_uniform = glGetUniformLocation(g_v27_program, "u_v9_reprojection");
+    g_v9_depth_proxy_uniform = glGetUniformLocation(g_v27_program, "u_v9_depth_proxy");
+    g_v9_history_clip_uniform = glGetUniformLocation(g_v27_program, "u_v9_history_clip");
+    g_v9_responsive_uniform = glGetUniformLocation(g_v27_program, "u_v9_responsive");
+    // V10 Anti-shimmer / temporal stability refinement.
+    g_v10_antishimmer_uniform = glGetUniformLocation(g_v27_program, "u_v10_antishimmer");
+    g_v10_shimmer_strength_uniform = glGetUniformLocation(g_v27_program, "u_v10_shimmer_strength");
+    g_v10_stability_threshold_uniform = glGetUniformLocation(g_v27_program, "u_v10_stability_threshold");
+    g_v10_stability_softness_uniform = glGetUniformLocation(g_v27_program, "u_v10_stability_softness");
+    g_v10_edge_protection_uniform = glGetUniformLocation(g_v27_program, "u_v10_edge_protection");
+    g_v11_detail_preservation_uniform = glGetUniformLocation(g_v27_program, "u_v11_detail_preservation");
+    g_v11_ghost_rejection_uniform = glGetUniformLocation(g_v27_program, "u_v11_ghost_rejection");
+    g_v11_detail_threshold_uniform = glGetUniformLocation(g_v27_program, "u_v11_detail_threshold");
+    g_v11_detail_softness_uniform = glGetUniformLocation(g_v27_program, "u_v11_detail_softness");
+    g_v11_color_clip_uniform = glGetUniformLocation(g_v27_program, "u_v11_color_clip");
+    g_v12_motion_handling_uniform = glGetUniformLocation(g_v27_program, "u_v12_motion_handling");
+    g_v12_camera_motion_uniform = glGetUniformLocation(g_v27_program, "u_v12_camera_motion");
+    g_v12_motion_softness_uniform = glGetUniformLocation(g_v27_program, "u_v12_motion_softness");
+    g_v12_motion_threshold_uniform = glGetUniformLocation(g_v27_program, "u_v12_motion_threshold");
+    g_v12_history_response_uniform = glGetUniformLocation(g_v27_program, "u_v12_history_response");
+    g_v12_motion_detail_preservation_uniform = glGetUniformLocation(g_v27_program, "u_v12_motion_detail_preservation");
+    g_poco_m5_tuning_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_tuning");
+    g_poco_m5_quality_scale_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_quality_scale");
+    g_poco_m5_history_scale_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_history_scale");
+    g_poco_m5_detail_budget_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_detail_budget");
+    g_poco_m5_temporal_response_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_temporal_response");
+    g_poco_m5_motion_cost_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_motion_cost");
 
     glGenTextures(1, &g_v27_texture);
     glBindTexture(GL_TEXTURE_2D, g_v27_texture);
@@ -1227,12 +1477,17 @@ static bool v27_init(int width, int height) {
     GLenum fbo_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (fbo_status != GL_FRAMEBUFFER_COMPLETE) {
+        char stage[64] = {};
+        snprintf(stage, sizeof(stage), "fbo_incomplete_%u", static_cast<unsigned int>(fbo_status));
+        v27_set_init_diag(stage, "", glGetError());
         if (g_v27_fbo) glDeleteFramebuffers(1, &g_v27_fbo);
         g_v27_fbo = 0;
         g_v27_failed = true;
+        v27_write_runtime_report();
         pthread_mutex_unlock(&g_v27_mutex);
         return false;
     }
+    v27_set_init_diag("fbo_complete");
 
     // V2.8 temporal history is allocated lazily by v27_ensure_history().
     // Do not reserve a full-resolution history texture/FBO during module init when
@@ -1255,11 +1510,14 @@ static bool v27_init(int width, int height) {
 
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
+        v27_set_init_diag("post_resource_gl_error", "", err);
         g_v27_failed = true;
+        v27_write_runtime_report();
         pthread_mutex_unlock(&g_v27_mutex);
         return false;
     }
     g_v27_initialized = true;
+    v27_set_init_diag("initialized_ok");
     pthread_mutex_unlock(&g_v27_mutex);
     return true;
 }
@@ -1532,6 +1790,9 @@ static void v27_write_runtime_report() {
     out += "expected_viewport_width=" + std::to_string(g_v27_width) + "\n";
     out += "expected_viewport_height=" + std::to_string(g_v27_height) + "\n";
     out += "process_error=" + std::to_string((unsigned long long)g_v27_process_error) + "\n";
+    out += "init_stage=" + g_v27_init_stage + "\n";
+    out += "init_gl_error=" + std::to_string(static_cast<unsigned int>(g_v27_init_gl_error)) + "\n";
+    out += "init_shader_log=" + g_v27_shader_log + "\n";
     out += "last_gl_error=" + std::string(errbuf) + "\n";
     out += "program=" + std::to_string((unsigned int)g_v27_program) + "\n";
     out += "texture=" + std::to_string((unsigned int)g_v27_texture) + "\n";
@@ -1962,6 +2223,33 @@ static bool v27_process_frame(EGLSurface surface) {
     glUniform1f(g_ai_dynamic_quality_uniform, (g_ai_dynamic_quality_value ? 1.0f : 0.0f));
     glUniform1f(g_ai_detail_budget_uniform, g_ai_detail_budget_value);
     glUniform1f(g_ai_motion_complexity_uniform, g_ai_motion_complexity_value);
+    glUniform1f(g_v9_reconstruction_uniform, g_v9_reconstruction_value ? 1.0f : 0.0f);
+    glUniform1f(g_v9_reprojection_uniform, g_v9_reprojection_value);
+    glUniform1f(g_v9_depth_proxy_uniform, g_v9_depth_proxy_value);
+    glUniform1f(g_v9_history_clip_uniform, g_v9_history_clip_value);
+    glUniform1f(g_v9_responsive_uniform, g_v9_responsive_value);
+    glUniform1f(g_v10_antishimmer_uniform, g_v10_antishimmer_value ? 1.0f : 0.0f);
+    glUniform1f(g_v10_shimmer_strength_uniform, g_v10_shimmer_strength_value);
+    glUniform1f(g_v10_stability_threshold_uniform, g_v10_stability_threshold_value);
+    glUniform1f(g_v10_stability_softness_uniform, g_v10_stability_softness_value);
+    glUniform1f(g_v10_edge_protection_uniform, g_v10_edge_protection_value);
+    glUniform1f(g_v11_detail_preservation_uniform, g_v11_detail_preservation_value ? 1.0f : 0.0f);
+    glUniform1f(g_v11_ghost_rejection_uniform, g_v11_ghost_rejection_value);
+    glUniform1f(g_v11_detail_threshold_uniform, g_v11_detail_threshold_value);
+    glUniform1f(g_v11_detail_softness_uniform, g_v11_detail_softness_value);
+    glUniform1f(g_v11_color_clip_uniform, g_v11_color_clip_value);
+    glUniform1f(g_v12_motion_handling_uniform, g_v12_motion_handling_value ? 1.0f : 0.0f);
+    glUniform1f(g_v12_camera_motion_uniform, g_v12_camera_motion_value);
+    glUniform1f(g_v12_motion_softness_uniform, g_v12_motion_softness_value);
+    glUniform1f(g_v12_motion_threshold_uniform, g_v12_motion_threshold_value);
+    glUniform1f(g_v12_history_response_uniform, g_v12_history_response_value);
+    glUniform1f(g_v12_motion_detail_preservation_uniform, g_v12_motion_detail_preservation_value);
+    glUniform1f(g_poco_m5_tuning_uniform, g_poco_m5_tuning_value ? 1.0f : 0.0f);
+    glUniform1f(g_poco_m5_quality_scale_uniform, g_poco_m5_quality_scale_value);
+    glUniform1f(g_poco_m5_history_scale_uniform, g_poco_m5_history_scale_value);
+    glUniform1f(g_poco_m5_detail_budget_uniform, g_poco_m5_detail_budget_value);
+    glUniform1f(g_poco_m5_temporal_response_uniform, g_poco_m5_temporal_response_value);
+    glUniform1f(g_poco_m5_motion_cost_uniform, g_poco_m5_motion_cost_value);
     glBindBuffer(GL_ARRAY_BUFFER, g_v27_vbo);
     glEnableVertexAttribArray((GLuint)g_v27_pos);
     glEnableVertexAttribArray((GLuint)g_v27_uv);

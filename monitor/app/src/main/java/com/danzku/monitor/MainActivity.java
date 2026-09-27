@@ -194,6 +194,8 @@ public class MainActivity extends Activity {
         targets.setMinHeight(dp(60));
         targets.setOnClickListener(v -> showTargetAppsDialog());
         root.addView(targets);
+        addQuickVisualPresets();
+
         addSectionHeader("PERFORMANCE & RUNTIME");
         addToggle("RAM Optimization", "ram_optimization");
         addToggle("FPS Boost", "fps_boost");
@@ -231,6 +233,43 @@ public class MainActivity extends Activity {
         addFloatControl("Structure Strength", "structure_strength", 0f, 1f, 0.35f, "", "", "%.2f");
         addToggle("High-End Reconstruction", "high_end_reconstruction");
         addFloatControl("High-End Strength", "high_end_strength", 0f, 1f, 0.65f, "", "", "%.2f");
+
+        addSectionHeader("V9 TEMPORAL RECONSTRUCTION");
+        addToggle("V9 Reconstruction", "v9_reconstruction");
+        addFloatControl("V9 Reprojection", "v9_reprojection", 0f, 1f, 0.55f, "", "", "%.2f");
+        addFloatControl("V9 Depth Proxy", "v9_depth_proxy", 0f, 1f, 0.45f, "", "", "%.2f");
+        addFloatControl("V9 History Clip", "v9_history_clip", 0f, 1f, 0.60f, "", "", "%.2f");
+        addFloatControl("V9 Responsive", "v9_responsive", 0f, 1f, 0.35f, "", "", "%.2f");
+
+        addSectionHeader("V10 ANTI-SHIMMER / STABILITY");
+        addToggle("Anti-Shimmer", "v10_antishimmer");
+        addFloatControl("Shimmer Suppression", "v10_shimmer_strength", 0f, 1f, 0.60f, "", "", "%.2f");
+        addFloatControl("Stability Threshold", "v10_stability_threshold", 0f, 0.10f, 0.018f, "", "", "%.3f");
+        addFloatControl("Stability Softness", "v10_stability_softness", 0f, 0.20f, 0.060f, "", "", "%.3f");
+        addFloatControl("Edge Protection", "v10_edge_protection", 0f, 1f, 0.75f, "", "", "%.2f");
+
+        addSectionHeader("V11 DETAIL / GHOST PROTECTION");
+        addToggle("Detail Preservation", "v11_detail_preservation");
+        addFloatControl("Ghost Rejection", "v11_ghost_rejection", 0f, 1f, 0.72f, "", "", "%.2f");
+        addFloatControl("Detail Threshold", "v11_detail_threshold", 0f, 0.10f, 0.018f, "", "", "%.3f");
+        addFloatControl("Detail Softness", "v11_detail_softness", 0f, 0.20f, 0.055f, "", "", "%.3f");
+        addFloatControl("History Color Clip", "v11_color_clip", 0f, 1f, 0.75f, "", "", "%.2f");
+
+        addSectionHeader("V12 MOTION HANDLING");
+        addToggle("Motion Handling", "v12_motion_handling");
+        addFloatControl("Camera Motion", "v12_camera_motion", 0f, 1f, 0.65f, "", "", "%.2f");
+        addFloatControl("Motion Softness", "v12_motion_softness", 0f, 0.30f, 0.12f, "", "", "%.2f");
+        addFloatControl("Motion Threshold", "v12_motion_threshold", 0f, 0.15f, 0.025f, "", "", "%.3f");
+        addFloatControl("History Response", "v12_history_response", 0f, 1f, 0.75f, "", "", "%.2f");
+        addFloatControl("Motion Detail Preservation", "v12_motion_detail_preservation", 0f, 1f, 0.80f, "", "", "%.2f");
+
+        addSectionHeader("POCO M5 TUNING");
+        addToggle("POCO M5 Tuning", "poco_m5_tuning");
+        addFloatControl("Quality Scale", "poco_m5_quality_scale", 0.55f, 1f, 0.82f, "", "", "%.2f");
+        addFloatControl("History Scale", "poco_m5_history_scale", 0.50f, 1f, 0.75f, "", "", "%.2f");
+        addFloatControl("Detail Budget", "poco_m5_detail_budget", 0.45f, 1f, 0.72f, "", "", "%.2f");
+        addFloatControl("Temporal Response", "poco_m5_temporal_response", 0.55f, 1f, 0.88f, "", "", "%.2f");
+        addFloatControl("Motion Cost", "poco_m5_motion_cost", 0.55f, 1f, 0.82f, "", "", "%.2f");
 
         addSectionHeader("COLOR & TEXTURE");
         addSaturationControl();
@@ -474,6 +513,122 @@ public class MainActivity extends Activity {
             if (validPackageName(pkg)) out.add(pkg);
         }
         return out;
+    }
+
+    void addQuickVisualPresets() {
+        addSectionHeader("SMART VISUAL PRESETS");
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(8, 8, 8, 8);
+
+        String[] names = {"NATURAL", "VIVID", "CINEMATIC"};
+        for (String name : names) {
+            Button b = new Button(this);
+            b.setText(name);
+            b.setAllCaps(false);
+            b.setTextSize(14);
+            b.setMinHeight(dp(54));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(58), 1f);
+            lp.setMargins(4, 0, 4, 0);
+            b.setLayoutParams(lp);
+            b.setOnClickListener(v -> applySmartPreset(name));
+            row.addView(b);
+        }
+        root.addView(row);
+
+        TextView hint = tv("Rekomendasi cepat: Natural = seimbang • Vivid = warna/detail • Cinematic = kontras/film");
+        hint.setTextSize(12);
+        root.addView(hint);
+    }
+
+    void applySmartPreset(String name) {
+        final java.util.LinkedHashMap<String,String> values = new java.util.LinkedHashMap<>();
+        // The temporal safety layer stays enabled across all presets. Only image character
+        // and controlled temporal responsiveness vary by preset.
+        values.put("v9_reconstruction", "1");
+        values.put("v10_antishimmer", "1");
+        values.put("v11_detail_preservation", "1");
+        values.put("v12_motion_handling", "1");
+        values.put("poco_m5_tuning", "1");
+
+        if ("NATURAL".equals(name)) {
+            values.put("sharpen", "0.14");
+            values.put("clarity", "0.06");
+            values.put("temporal_strength", "0.18");
+            values.put("edge_strength", "0.08");
+            values.put("saturation", "1.08");
+            values.put("vibrance", "0.12");
+            values.put("hdr_enhancement", "0.06");
+            values.put("adaptive_texture_enhancement", "0.10");
+            values.put("reconstruction", "0.85");
+            values.put("ai_detail_budget", "0.72");
+            values.put("ai_ghost_protection", "0.62");
+            values.put("v9_reprojection", "0.48");
+            values.put("v9_depth_proxy", "0.40");
+            values.put("v9_history_clip", "0.68");
+            values.put("v9_responsive", "0.28");
+            values.put("v10_shimmer_strength", "0.60");
+            values.put("v10_edge_protection", "0.82");
+            values.put("v11_ghost_rejection", "0.72");
+            values.put("v12_camera_motion", "0.62");
+            values.put("v12_history_response", "0.76");
+            values.put("v12_motion_detail_preservation", "0.84");
+        } else if ("VIVID".equals(name)) {
+            values.put("sharpen", "0.20");
+            values.put("clarity", "0.10");
+            values.put("temporal_strength", "0.20");
+            values.put("edge_strength", "0.12");
+            values.put("saturation", "1.32");
+            values.put("vibrance", "0.28");
+            values.put("hdr_enhancement", "0.12");
+            values.put("adaptive_texture_enhancement", "0.18");
+            values.put("reconstruction", "1.00");
+            values.put("ai_detail_budget", "0.82");
+            values.put("ai_ghost_protection", "0.58");
+            values.put("v9_reprojection", "0.56");
+            values.put("v9_depth_proxy", "0.48");
+            values.put("v9_history_clip", "0.58");
+            values.put("v9_responsive", "0.34");
+            values.put("v10_shimmer_strength", "0.62");
+            values.put("v10_edge_protection", "0.76");
+            values.put("v11_ghost_rejection", "0.70");
+            values.put("v12_camera_motion", "0.68");
+            values.put("v12_history_response", "0.72");
+            values.put("v12_motion_detail_preservation", "0.78");
+        } else {
+            values.put("sharpen", "0.16");
+            values.put("clarity", "0.09");
+            values.put("temporal_strength", "0.24");
+            values.put("edge_strength", "0.09");
+            values.put("saturation", "1.18");
+            values.put("vibrance", "0.16");
+            values.put("hdr_enhancement", "0.18");
+            values.put("adaptive_texture_enhancement", "0.13");
+            values.put("reconstruction", "0.92");
+            values.put("ai_detail_budget", "0.76");
+            values.put("ai_ghost_protection", "0.66");
+            values.put("v9_reprojection", "0.60");
+            values.put("v9_depth_proxy", "0.52");
+            values.put("v9_history_clip", "0.64");
+            values.put("v9_responsive", "0.30");
+            values.put("v10_shimmer_strength", "0.66");
+            values.put("v10_edge_protection", "0.80");
+            values.put("v11_ghost_rejection", "0.76");
+            values.put("v12_camera_motion", "0.70");
+            values.put("v12_history_response", "0.80");
+            values.put("v12_motion_detail_preservation", "0.82");
+        }
+
+        ioExecutor.execute(() -> {
+            for (java.util.Map.Entry<String,String> e : values.entrySet()) {
+                writeConfigValue(e.getKey(), e.getValue());
+            }
+            syncNativeControlFromConfigNow();
+            runOnUiThread(() ->
+                Toast.makeText(MainActivity.this, "Preset " + name + " diterapkan", Toast.LENGTH_SHORT).show()
+            );
+        });
     }
 
     void addSaturationControl() {
@@ -1087,6 +1242,15 @@ public class MainActivity extends Activity {
         for (String key : new String[]{"enabled","advanced_aa","shadow_enhancement","contact_shadow","ao_enhancement","specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement","visual_proof","visual_proof_bypass","logging"}) {
             String v=value(st.report,key); sb.append(key).append(": ").append(v==null?"--":featureState(v)).append("\n");
         }
+        sb.append("\nTemporal pipeline config:\n");
+        for (String key : new String[]{"v9_reconstruction","v9_reprojection","v9_depth_proxy","v9_history_clip","v9_responsive",
+                "v10_antishimmer","v10_shimmer_strength","v10_stability_threshold","v10_stability_softness","v10_edge_protection",
+                "v11_detail_preservation","v11_ghost_rejection","v11_detail_threshold","v11_detail_softness","v11_color_clip",
+                "v12_motion_handling","v12_camera_motion","v12_motion_softness","v12_motion_threshold","v12_history_response","v12_motion_detail_preservation",
+                "poco_m5_tuning","poco_m5_quality_scale","poco_m5_history_scale","poco_m5_detail_budget","poco_m5_temporal_response","poco_m5_motion_cost"}) {
+            String cv=configValueFromText(config,key);
+            if (cv != null) sb.append(key).append(": ").append(cv).append("\n");
+        }
         String saturation = configValueFromText(config, "saturation");
         if (saturation != null) sb.append("Saturation Pop: ").append(saturation).append("×\n");
         String pending = pendingFeatures(st.report, config);
@@ -1100,7 +1264,7 @@ public class MainActivity extends Activity {
 
     String pendingFeatures(String report, String config) {
         StringBuilder out=new StringBuilder();
-        String[] keys={"enabled","advanced_aa","shadow_enhancement","contact_shadow","ao_enhancement","specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement","visual_proof","visual_proof_bypass","logging"};
+        String[] keys={"enabled","advanced_aa","shadow_enhancement","contact_shadow","ao_enhancement","specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement","visual_proof","visual_proof_bypass","logging","temporal","temporal_detail_recovery","reconstruction_confidence","neural_style_reconstruction","high_end_reconstruction","ai_reconstruction_v6","ai_dynamic_quality","ai_low_memory_history","v9_reconstruction","v10_antishimmer","v11_detail_preservation","v12_motion_handling","poco_m5_tuning"};
         for(String key:keys){
             String c=configValueFromText(config,key), r=value(report,key);
             if(c!=null && r!=null && isFeatureOn(c)!=isFeatureOn(r)){

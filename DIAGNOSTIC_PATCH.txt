@@ -1,0 +1,1 @@
+Diagnostic-only patch: records init stage, shader compiler log, program linker log, FBO status, and GL error in danzku_v40_runtime. No visual algorithm/tuning changes.

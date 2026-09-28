@@ -34,6 +34,8 @@ static EglGetProcAddressFn g_orig_eglGetProcAddress = nullptr;
 static volatile unsigned long long g_egl_get_proc_calls = 0;
 static volatile unsigned long long g_egl_bind_requests = 0;
 static volatile unsigned long long g_egl_viewport_requests = 0;
+static pthread_mutex_t g_egl_name_mutex = PTHREAD_MUTEX_INITIALIZER;
+static char g_egl_last_proc_name[128] = "";
 static volatile unsigned long long g_gl_bind_framebuffer_calls = 0;
 static volatile unsigned long long g_gl_viewport_calls = 0;
 static volatile unsigned int g_gl_last_framebuffer_target = 0;
@@ -2475,9 +2477,12 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
         report += "gles_viewport_hooked=" + std::string(g_orig_glViewport ? "YES" : "NO") + "\n";
         report += "gles_bind_framebuffer_calls=" + std::to_string(__atomic_load_n(&g_gl_bind_framebuffer_calls, __ATOMIC_RELAXED)) + "\n";
         report += "gles_viewport_calls=" + std::to_string(__atomic_load_n(&g_gl_viewport_calls, __ATOMIC_RELAXED)) + "\n";
-        report += "egl_get_proc_calls=" + std::to_string(__atomic_load_n(&g_egl_get_proc_calls, __ATOMIC_RELAXED)) + "\\n";
-        report += "egl_bind_framebuffer_requests=" + std::to_string(__atomic_load_n(&g_egl_bind_requests, __ATOMIC_RELAXED)) + "\\n";
-        report += "egl_viewport_requests=" + std::to_string(__atomic_load_n(&g_egl_viewport_requests, __ATOMIC_RELAXED)) + "\\n";
+        report += "egl_get_proc_calls=" + std::to_string(__atomic_load_n(&g_egl_get_proc_calls, __ATOMIC_RELAXED)) + "\n";
+        report += "egl_bind_framebuffer_requests=" + std::to_string(__atomic_load_n(&g_egl_bind_requests, __ATOMIC_RELAXED)) + "\n";
+        report += "egl_viewport_requests=" + std::to_string(__atomic_load_n(&g_egl_viewport_requests, __ATOMIC_RELAXED)) + "\n";
+        pthread_mutex_lock(&g_egl_name_mutex);
+        report += std::string("egl_last_proc_name=") + g_egl_last_proc_name + "\n";
+        pthread_mutex_unlock(&g_egl_name_mutex);
         report += "gles_last_framebuffer_target=" + std::to_string(__atomic_load_n(&g_gl_last_framebuffer_target, __ATOMIC_RELAXED)) + "\n";
         report += "gles_last_framebuffer=" + std::to_string(__atomic_load_n(&g_gl_last_framebuffer, __ATOMIC_RELAXED)) + "\n";
         report += "gles_last_viewport=" +
@@ -2605,6 +2610,9 @@ static void GL_APIENTRY hooked_glViewport(GLint x, GLint y, GLsizei width, GLsiz
 static __eglMustCastToProperFunctionPointerType hooked_eglGetProcAddress(const char* name) {
     if (!g_orig_eglGetProcAddress) return nullptr;
     __atomic_add_fetch(&g_egl_get_proc_calls, 1ULL, __ATOMIC_RELAXED);
+    pthread_mutex_lock(&g_egl_name_mutex);
+    snprintf(g_egl_last_proc_name, sizeof(g_egl_last_proc_name), "%s", name ? name : "<null>");
+    pthread_mutex_unlock(&g_egl_name_mutex);
     auto proc = g_orig_eglGetProcAddress(name);
     if (!name || !proc) return proc;
     if (strcmp(name, "glBindFramebuffer") == 0) {

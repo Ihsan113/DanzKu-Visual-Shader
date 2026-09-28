@@ -1,0 +1,28 @@
+DANZKU VISUAL SHADER - STAGE 3 STATUS
+
+APK UI FIX
+- Saturation Pop SeekBar is registered as a dependent control of color_master.
+- Its enabled state requires both global engine enabled and color_master enabled.
+- Disabled alpha is 0.38.
+- Existing config write and native sync behavior is unchanged.
+
+GLES DIAGNOSTICS PRESENT IN SOURCE
+- The existing hooked_eglSwapBuffers() runs a one-time, read-only EGL/GLES state probe.
+- Probe records current EGL context, surface dimensions, GLES version/renderer/vendor,
+  GL_FRAMEBUFFER_BINDING, GL_VIEWPORT, GL_MAX_TEXTURE_SIZE, and GL error.
+- Probe report is written as danzku_v261_<pid>.txt when logging is enabled.
+- This is a state probe at swap time, NOT a hook on glBindFramebuffer/glViewport,
+  and it does not capture every GL call or prove the game's pre-draw call sequence.
+
+RENDER-TARGET REDIRECT / TRUE SUPERSAMPLING
+- Not implemented.
+- Existing processing is invoked from eglSwapBuffers after the game has rendered.
+- The source does not establish a safe point to redirect the game's render target.
+- Do not treat a larger DanzKu texture or a swap-time GL state probe as true supersampling.
+- A per-call GLES hook would require a separately validated interception mechanism,
+  thread/context-safe logging, state preservation, and a tested fallback. It was not
+  added because the current source does not provide a validated hook backend for it.
+
+BUILD / TEST STATUS
+- Source archive includes the APK UI fix and this Stage 3 status note.
+- Android APK build and device runtime verification were not run in this environment.

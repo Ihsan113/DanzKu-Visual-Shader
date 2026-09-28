@@ -958,6 +958,7 @@ public class MainActivity extends Activity {
             }
         });
         box.addView(saturationSeekBar);
+        dependentControls.computeIfAbsent("color_master", k -> new ArrayList<>()).add(saturationSeekBar);
 
         TextView hint = tv("1.00× native  •  1.25× pop jelas  •  1.50× pop kuat");
         hint.setTextSize(10);
@@ -1173,9 +1174,11 @@ public class MainActivity extends Activity {
                 });
             }
         });
-        boolean masterOn = isFeatureOn(configValueFromText(config, "enabled"));
-        saturationSeekBar.setEnabled(masterOn);
-        saturationSeekBar.setAlpha(masterOn ? 1f : 0.45f);
+        boolean engineOn = isFeatureOn(configValueFromText(config, "enabled"));
+        boolean colorMasterOn = isFeatureOn(configValueFromText(config, "color_master"));
+        boolean enabled = engineOn && colorMasterOn;
+        saturationSeekBar.setEnabled(enabled);
+        saturationSeekBar.setAlpha(enabled ? 1f : 0.38f);
     }
 
     void showVisualConfigEditor() {

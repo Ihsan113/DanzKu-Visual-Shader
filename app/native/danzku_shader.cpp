@@ -2475,6 +2475,9 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
         report += "gles_viewport_hooked=" + std::string(g_orig_glViewport ? "YES" : "NO") + "\n";
         report += "gles_bind_framebuffer_calls=" + std::to_string(__atomic_load_n(&g_gl_bind_framebuffer_calls, __ATOMIC_RELAXED)) + "\n";
         report += "gles_viewport_calls=" + std::to_string(__atomic_load_n(&g_gl_viewport_calls, __ATOMIC_RELAXED)) + "\n";
+        report += "egl_get_proc_calls=" + std::to_string(__atomic_load_n(&g_egl_get_proc_calls, __ATOMIC_RELAXED)) + "\\n";
+        report += "egl_bind_framebuffer_requests=" + std::to_string(__atomic_load_n(&g_egl_bind_requests, __ATOMIC_RELAXED)) + "\\n";
+        report += "egl_viewport_requests=" + std::to_string(__atomic_load_n(&g_egl_viewport_requests, __ATOMIC_RELAXED)) + "\\n";
         report += "gles_last_framebuffer_target=" + std::to_string(__atomic_load_n(&g_gl_last_framebuffer_target, __ATOMIC_RELAXED)) + "\n";
         report += "gles_last_framebuffer=" + std::to_string(__atomic_load_n(&g_gl_last_framebuffer, __ATOMIC_RELAXED)) + "\n";
         report += "gles_last_viewport=" +

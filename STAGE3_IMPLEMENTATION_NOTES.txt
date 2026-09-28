@@ -42,3 +42,11 @@ V2.63 EGL PROC ADDRESS INTERCEPTION PATCH
   framebuffer, change viewport dimensions, or implement true supersampling.
 - Runtime success depends on Unity requesting the functions after installation;
   device verification is still required. Android native build was not run here.
+
+
+V2.63 diagnostic follow-up (2026-09-28)
+- Added periodic telemetry counters for eglGetProcAddress calls and requests
+  for glBindFramebuffer/glViewport.
+- Diagnostic instrumentation only: this does not implement true supersampling,
+  allocate a higher-resolution game framebuffer, or redirect Unity rendering.
+- Build and device runtime validation are still required.

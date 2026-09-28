@@ -29,3 +29,16 @@ BUILD / TEST STATUS
 
 
 Periodic probe update: EGL/GLES swap-time snapshot refreshes on the first hooked swap and then every 120 hooked swaps. This is not a per-call GLES hook, does not record intermediate framebuffer transitions, and does not implement framebuffer redirection or true supersampling. Build and device runtime validation are required.
+
+V2.63 EGL PROC ADDRESS INTERCEPTION PATCH
+- Added a libunity.so GOT hook for eglGetProcAddress as a fallback when direct
+  glBindFramebuffer/glViewport imports are absent.
+- The wrapper forwards every request to the original eglGetProcAddress and only
+  substitutes the returned pointer for glBindFramebuffer and glViewport.
+- The substituted wrappers preserve arguments and forward calls to the resolved
+  original GLES function; they collect call counters and last arguments.
+- Install telemetry now reports eglGetProcAddress hook status and GOT address.
+- This is an interception/telemetry patch only. It does NOT redirect the game's
+  framebuffer, change viewport dimensions, or implement true supersampling.
+- Runtime success depends on Unity requesting the functions after installation;
+  device verification is still required. Android native build was not run here.

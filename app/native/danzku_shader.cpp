@@ -29,6 +29,11 @@ using BindFramebufferFn = void (GL_APIENTRY *)(GLenum, GLuint);
 using ViewportFn = void (GL_APIENTRY *)(GLint, GLint, GLsizei, GLsizei);
 static BindFramebufferFn g_orig_glBindFramebuffer = nullptr;
 static ViewportFn g_orig_glViewport = nullptr;
+using EglGetProcAddressFn = __eglMustCastToProperFunctionPointerType (*)(const char*);
+static EglGetProcAddressFn g_orig_eglGetProcAddress = nullptr;
+static volatile unsigned long long g_egl_get_proc_calls = 0;
+static volatile unsigned long long g_egl_bind_requests = 0;
+static volatile unsigned long long g_egl_viewport_requests = 0;
 static volatile unsigned long long g_gl_bind_framebuffer_calls = 0;
 static volatile unsigned long long g_gl_viewport_calls = 0;
 static volatile unsigned int g_gl_last_framebuffer_target = 0;
@@ -2592,6 +2597,26 @@ static bool parse_map_identity(const char* needle, dev_t& dev, ino_t& ino, std::
 
 
 // V2.62 GLES call telemetry. Observe imported libunity calls without changing arguments.
+static void GL_APIENTRY hooked_glBindFramebuffer(GLenum target, GLuint framebuffer);
+static void GL_APIENTRY hooked_glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
+static __eglMustCastToProperFunctionPointerType hooked_eglGetProcAddress(const char* name) {
+    if (!g_orig_eglGetProcAddress) return nullptr;
+    __atomic_add_fetch(&g_egl_get_proc_calls, 1ULL, __ATOMIC_RELAXED);
+    auto proc = g_orig_eglGetProcAddress(name);
+    if (!name || !proc) return proc;
+    if (strcmp(name, "glBindFramebuffer") == 0) {
+        __atomic_add_fetch(&g_egl_bind_requests, 1ULL, __ATOMIC_RELAXED);
+        if (!g_orig_glBindFramebuffer) g_orig_glBindFramebuffer = reinterpret_cast<BindFramebufferFn>(proc);
+        return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(hooked_glBindFramebuffer);
+    }
+    if (strcmp(name, "glViewport") == 0) {
+        __atomic_add_fetch(&g_egl_viewport_requests, 1ULL, __ATOMIC_RELAXED);
+        if (!g_orig_glViewport) g_orig_glViewport = reinterpret_cast<ViewportFn>(proc);
+        return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(hooked_glViewport);
+    }
+    return proc;
+}
+
 static void GL_APIENTRY hooked_glBindFramebuffer(GLenum target, GLuint framebuffer) {
     __atomic_add_fetch(&g_gl_bind_framebuffer_calls, 1ULL, __ATOMIC_RELAXED);
     __atomic_store_n(&g_gl_last_framebuffer_target, static_cast<unsigned int>(target), __ATOMIC_RELAXED);
@@ -2840,6 +2865,13 @@ public:
                     reinterpret_cast<void**>(&g_orig_glBindFramebuffer), &bind_got, bind_detail);
                 install_gles_got_hook("glViewport", reinterpret_cast<void*>(hooked_glViewport),
                     reinterpret_cast<void**>(&g_orig_glViewport), &viewport_got, viewport_detail);
+                std::string proc_detail;
+                void* proc_got = nullptr;
+                void* proc_after = nullptr;
+                g_orig_eglGetProcAddress = nullptr;
+                bool proc_ok = install_gles_got_hook("eglGetProcAddress",
+                    reinterpret_cast<void*>(hooked_eglGetProcAddress),
+                    reinterpret_cast<void**>(&g_orig_eglGetProcAddress), &proc_got, proc_detail);
                 if (g_v27_logging_value) {
                     std::string telemetry = "stage=v262_gles_hook_install\n";
                     telemetry += "pid=" + std::to_string((int)getpid()) + "\n";
@@ -2847,6 +2879,9 @@ public:
                     telemetry += "glBindFramebuffer_got=" + hex_ptr(bind_got) + "\n";
                     telemetry += "glViewport=" + viewport_detail + "\n";
                     telemetry += "glViewport_got=" + hex_ptr(viewport_got) + "\n";
+                    telemetry += "eglGetProcAddress=" + proc_detail + "\n";
+                    telemetry += "eglGetProcAddress_got=" + hex_ptr(proc_got) + "\n";
+                    telemetry += "eglGetProcAddress_hooked=" + std::string(proc_ok ? "YES" : "NO") + "\n";
                     write_file(g_app_files_dir + "/danzku_v262_gles_hook_" + std::to_string((int)getpid()) + ".txt", telemetry);
                 }
             }

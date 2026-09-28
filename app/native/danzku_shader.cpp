@@ -2442,14 +2442,18 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     if (config_changed) v27_write_runtime_report();
     if (g_v27_enabled_value) update_fps_telemetry();
     ++g_hook_calls;
-    // Probe only once per process. It observes the current EGL/GL state and does not
-    // modify framebuffer contents, viewport, textures, or swap behavior.
+    // Read-only state snapshot every 120 swaps. This is swap-time telemetry,
+    // not a per-call glBindFramebuffer/glViewport hook.
     static volatile bool probe_done = false;
-    if (!probe_done) {
+    static unsigned long long last_probe_call = 0;
+    const bool take_probe = !probe_done || (g_hook_calls - last_probe_call >= 120);
+    if (take_probe) {
         probe_done = true;
-        std::string report = "stage=v261_probe\n";
-        report += "pid=" + std::to_string((int)getpid()) + "\n";
-        report += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\n";
+        last_probe_call = g_hook_calls;
+        std::string report = "stage=v261_probe_periodic\\n";
+        report += "pid=" + std::to_string((int)getpid()) + "\\n";
+        report += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\\n";
+        report += "probe_interval_frames=120\\n";
         append_egl_gl_probe(report, dpy, surface);
         if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v261_" + std::to_string((int)getpid()) + ".txt", report);
         EGLint w=0,h=0;

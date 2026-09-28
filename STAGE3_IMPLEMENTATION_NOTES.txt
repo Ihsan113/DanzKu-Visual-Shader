@@ -26,3 +26,6 @@ RENDER-TARGET REDIRECT / TRUE SUPERSAMPLING
 BUILD / TEST STATUS
 - Source archive includes the APK UI fix and this Stage 3 status note.
 - Android APK build and device runtime verification were not run in this environment.
+
+
+Periodic probe update: EGL/GLES swap-time snapshot refreshes on the first hooked swap and then every 120 hooked swaps. This is not a per-call GLES hook, does not record intermediate framebuffer transitions, and does not implement framebuffer redirection or true supersampling. Build and device runtime validation are required.

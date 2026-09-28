@@ -2450,11 +2450,22 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     if (take_probe) {
         probe_done = true;
         last_probe_call = g_hook_calls;
-        std::string report = "stage=v261_probe_periodic\\n";
-        report += "pid=" + std::to_string((int)getpid()) + "\\n";
-        report += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\\n";
-        report += "probe_interval_frames=120\\n";
+        std::string report = "stage=v261_probe_periodic\n";
+        report += "pid=" + std::to_string((int)getpid()) + "\n";
+        report += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\n";
+        report += "probe_interval_frames=120\n";
         append_egl_gl_probe(report, dpy, surface);
+        report += "gles_bind_framebuffer_hooked=" + std::string(g_orig_glBindFramebuffer ? "YES" : "NO") + "\n";
+        report += "gles_viewport_hooked=" + std::string(g_orig_glViewport ? "YES" : "NO") + "\n";
+        report += "gles_bind_framebuffer_calls=" + std::to_string(__atomic_load_n(&g_gl_bind_framebuffer_calls, __ATOMIC_RELAXED)) + "\n";
+        report += "gles_viewport_calls=" + std::to_string(__atomic_load_n(&g_gl_viewport_calls, __ATOMIC_RELAXED)) + "\n";
+        report += "gles_last_framebuffer_target=" + std::to_string(__atomic_load_n(&g_gl_last_framebuffer_target, __ATOMIC_RELAXED)) + "\n";
+        report += "gles_last_framebuffer=" + std::to_string(__atomic_load_n(&g_gl_last_framebuffer, __ATOMIC_RELAXED)) + "\n";
+        report += "gles_last_viewport=" +
+            std::to_string(__atomic_load_n(&g_gl_last_viewport[0], __ATOMIC_RELAXED)) + "," +
+            std::to_string(__atomic_load_n(&g_gl_last_viewport[1], __ATOMIC_RELAXED)) + "," +
+            std::to_string(__atomic_load_n(&g_gl_last_viewport[2], __ATOMIC_RELAXED)) + "," +
+            std::to_string(__atomic_load_n(&g_gl_last_viewport[3], __ATOMIC_RELAXED)) + "\n";
         if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v261_" + std::to_string((int)getpid()) + ".txt", report);
         EGLint w=0,h=0;
         if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE) w=0;
@@ -2568,6 +2579,33 @@ static bool parse_map_identity(const char* needle, dev_t& dev, ino_t& ino, std::
     return false;
 }
 
+
+// V2.62 GLES call telemetry. Observe imported libunity calls without changing arguments.
+using BindFramebufferFn = void (GL_APIENTRY *)(GLenum, GLuint);
+using ViewportFn = void (GL_APIENTRY *)(GLint, GLint, GLsizei, GLsizei);
+static BindFramebufferFn g_orig_glBindFramebuffer = nullptr;
+static ViewportFn g_orig_glViewport = nullptr;
+static volatile unsigned long long g_gl_bind_framebuffer_calls = 0;
+static volatile unsigned long long g_gl_viewport_calls = 0;
+static volatile unsigned int g_gl_last_framebuffer_target = 0;
+static volatile unsigned int g_gl_last_framebuffer = 0;
+static volatile int g_gl_last_viewport[4] = {0, 0, 0, 0};
+
+static void GL_APIENTRY hooked_glBindFramebuffer(GLenum target, GLuint framebuffer) {
+    __atomic_add_fetch(&g_gl_bind_framebuffer_calls, 1ULL, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_gl_last_framebuffer_target, static_cast<unsigned int>(target), __ATOMIC_RELAXED);
+    __atomic_store_n(&g_gl_last_framebuffer, static_cast<unsigned int>(framebuffer), __ATOMIC_RELAXED);
+    if (g_orig_glBindFramebuffer) g_orig_glBindFramebuffer(target, framebuffer);
+}
+static void GL_APIENTRY hooked_glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
+    __atomic_add_fetch(&g_gl_viewport_calls, 1ULL, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_gl_last_viewport[0], x, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_gl_last_viewport[1], y, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_gl_last_viewport[2], width, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_gl_last_viewport[3], height, __ATOMIC_RELAXED);
+    if (g_orig_glViewport) g_orig_glViewport(x, y, width, height);
+}
+
 struct GotPatchContext {
     const char* library_name;
     const char* symbol_name;
@@ -2678,6 +2716,20 @@ static bool install_manual_got_hook(std::string& detail, void** got_address, voi
     return true;
 }
 
+
+static bool install_gles_got_hook(const char* symbol, void* replacement, void** original,
+                                  void** got_address, std::string& detail) {
+    GotPatchContext ctx{};
+    ctx.library_name = "libunity.so";
+    ctx.symbol_name = symbol;
+    ctx.replacement = replacement;
+    ctx.original_out = original;
+    dl_iterate_phdr(patch_got_callback, &ctx);
+    if (got_address) *got_address = ctx.found_got;
+    detail = ctx.error ? ctx.error : (ctx.success ? "got_patch_ok" : "unknown_patch_failure");
+    return ctx.success && original && *original;
+}
+
 static void write_hook_report(const char* stage, const std::string& target_name,
                               const char* result, void* resolved, void* got_address,
                               void* original_address = nullptr, void* got_value_after = nullptr) {
@@ -2771,6 +2823,24 @@ public:
             void* got_after = nullptr;
             bool ok = install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after);
             g_hook_installed = ok && g_orig_eglSwapBuffers != nullptr;
+            if (g_hook_installed) {
+                std::string bind_detail, viewport_detail;
+                void* bind_got = nullptr;
+                void* viewport_got = nullptr;
+                install_gles_got_hook("glBindFramebuffer", reinterpret_cast<void*>(hooked_glBindFramebuffer),
+                    reinterpret_cast<void**>(&g_orig_glBindFramebuffer), &bind_got, bind_detail);
+                install_gles_got_hook("glViewport", reinterpret_cast<void*>(hooked_glViewport),
+                    reinterpret_cast<void**>(&g_orig_glViewport), &viewport_got, viewport_detail);
+                if (g_v27_logging_value) {
+                    std::string telemetry = "stage=v262_gles_hook_install\n";
+                    telemetry += "pid=" + std::to_string((int)getpid()) + "\n";
+                    telemetry += "glBindFramebuffer=" + bind_detail + "\n";
+                    telemetry += "glBindFramebuffer_got=" + hex_ptr(bind_got) + "\n";
+                    telemetry += "glViewport=" + viewport_detail + "\n";
+                    telemetry += "glViewport_got=" + hex_ptr(viewport_got) + "\n";
+                    write_file(g_app_files_dir + "/danzku_v262_gles_hook_" + std::to_string((int)getpid()) + ".txt", telemetry);
+                }
+            }
             if (ok) {
                 write_hook_report("install", g_target_name, detail.c_str(), resolved, got, reinterpret_cast<void*>(g_orig_eglSwapBuffers), got_after);
                 // Keep the process untouched otherwise; periodically verify that the

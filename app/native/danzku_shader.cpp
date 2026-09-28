@@ -24,6 +24,17 @@
 #include <pthread.h>
 #include "zygisk.hpp"
 
+// V2.62 GLES call telemetry state (declared before periodic report use).
+using BindFramebufferFn = void (GL_APIENTRY *)(GLenum, GLuint);
+using ViewportFn = void (GL_APIENTRY *)(GLint, GLint, GLsizei, GLsizei);
+static BindFramebufferFn g_orig_glBindFramebuffer = nullptr;
+static ViewportFn g_orig_glViewport = nullptr;
+static volatile unsigned long long g_gl_bind_framebuffer_calls = 0;
+static volatile unsigned long long g_gl_viewport_calls = 0;
+static volatile unsigned int g_gl_last_framebuffer_target = 0;
+static volatile unsigned int g_gl_last_framebuffer = 0;
+static volatile int g_gl_last_viewport[4] = {0, 0, 0, 0};
+
 static JNIEnv* g_env = nullptr;
 static bool g_target = false;
 static pthread_t g_thread{};
@@ -2581,16 +2592,6 @@ static bool parse_map_identity(const char* needle, dev_t& dev, ino_t& ino, std::
 
 
 // V2.62 GLES call telemetry. Observe imported libunity calls without changing arguments.
-using BindFramebufferFn = void (GL_APIENTRY *)(GLenum, GLuint);
-using ViewportFn = void (GL_APIENTRY *)(GLint, GLint, GLsizei, GLsizei);
-static BindFramebufferFn g_orig_glBindFramebuffer = nullptr;
-static ViewportFn g_orig_glViewport = nullptr;
-static volatile unsigned long long g_gl_bind_framebuffer_calls = 0;
-static volatile unsigned long long g_gl_viewport_calls = 0;
-static volatile unsigned int g_gl_last_framebuffer_target = 0;
-static volatile unsigned int g_gl_last_framebuffer = 0;
-static volatile int g_gl_last_viewport[4] = {0, 0, 0, 0};
-
 static void GL_APIENTRY hooked_glBindFramebuffer(GLenum target, GLuint framebuffer) {
     __atomic_add_fetch(&g_gl_bind_framebuffer_calls, 1ULL, __ATOMIC_RELAXED);
     __atomic_store_n(&g_gl_last_framebuffer_target, static_cast<unsigned int>(target), __ATOMIC_RELAXED);
@@ -2638,6 +2639,8 @@ static int patch_got_callback(struct dl_phdr_info* info, size_t, void* opaque) {
     if (!dynamic_phdr) { ctx->error = "dynamic_missing"; return 1; }
 
     auto* dyn = reinterpret_cast<const ElfW(Dyn)*>(info->dlpi_addr + dynamic_phdr->p_vaddr);
+    const ElfW(Rela)* jmprel = nullptr;
+    size_t jmprel_size = 0;
     const ElfW(Rela)* rela = nullptr;
     size_t rela_size = 0;
     const ElfW(Sym)* symtab = nullptr;
@@ -2646,55 +2649,61 @@ static int patch_got_callback(struct dl_phdr_info* info, size_t, void* opaque) {
 
     for (const ElfW(Dyn)* d = dyn; d->d_tag != DT_NULL; ++d) {
         switch (d->d_tag) {
-            case DT_JMPREL: rela = reinterpret_cast<const ElfW(Rela)*>(info->dlpi_addr + d->d_un.d_ptr); break;
-            case DT_PLTRELSZ: rela_size = static_cast<size_t>(d->d_un.d_val); break;
+            case DT_JMPREL: jmprel = reinterpret_cast<const ElfW(Rela)*>(info->dlpi_addr + d->d_un.d_ptr); break;
+            case DT_PLTRELSZ: jmprel_size = static_cast<size_t>(d->d_un.d_val); break;
             case DT_PLTREL: plt_rel_type = d->d_un.d_val; break;
+            case DT_RELA: rela = reinterpret_cast<const ElfW(Rela)*>(info->dlpi_addr + d->d_un.d_ptr); break;
+            case DT_RELASZ: rela_size = static_cast<size_t>(d->d_un.d_val); break;
             case DT_SYMTAB: symtab = reinterpret_cast<const ElfW(Sym)*>(info->dlpi_addr + d->d_un.d_ptr); break;
             case DT_STRTAB: strtab = reinterpret_cast<const char*>(info->dlpi_addr + d->d_un.d_ptr); break;
             default: break;
         }
     }
+    if (!symtab || !strtab) { ctx->error = "symbol_tables_missing"; return 1; }
 
-    if (!rela || !rela_size || !symtab || !strtab || plt_rel_type != DT_RELA) {
-        ctx->error = "rela_tables_missing";
-        return 1;
-    }
+    auto scan_relocations = [&](const ElfW(Rela)* entries, size_t bytes, bool plt) -> bool {
+        if (!entries || !bytes) return false;
+        if (plt && plt_rel_type != DT_RELA) return false;
+        const size_t count = bytes / sizeof(ElfW(Rela));
+        for (size_t i = 0; i < count; ++i) {
+            const ElfW(Rela)& r = entries[i];
+            const unsigned type = ELF64_R_TYPE(r.r_info);
+            if (type != R_AARCH64_JUMP_SLOT && type != R_AARCH64_GLOB_DAT) continue;
+            const size_t sym_index = ELF64_R_SYM(r.r_info);
+            const char* name = strtab + symtab[sym_index].st_name;
+            if (!name || strcmp(name, ctx->symbol_name) != 0) continue;
 
-    const size_t count = rela_size / sizeof(ElfW(Rela));
-    for (size_t i = 0; i < count; ++i) {
-        const ElfW(Rela)& r = rela[i];
-        if (ELF64_R_TYPE(r.r_info) != R_AARCH64_JUMP_SLOT) continue;
-        const size_t sym_index = ELF64_R_SYM(r.r_info);
-        const char* name = strtab + symtab[sym_index].st_name;
-        if (!name || strcmp(name, ctx->symbol_name) != 0) continue;
-
-        auto* got = reinterpret_cast<void**>(info->dlpi_addr + r.r_offset);
-        void* current = *got;
-        ctx->found_got = got;
-        ctx->found_original = current;
-        ctx->base = static_cast<uintptr_t>(info->dlpi_addr);
-        ctx->path = path;
-
-        const long page_size = sysconf(_SC_PAGESIZE);
-        uintptr_t page = reinterpret_cast<uintptr_t>(got) & ~(static_cast<uintptr_t>(page_size) - 1u);
-        if (mprotect(reinterpret_cast<void*>(page), static_cast<size_t>(page_size), PROT_READ | PROT_WRITE) != 0) {
-            ctx->error = "got_mprotect_rw_failed";
-            return 1;
+            auto* got = reinterpret_cast<void**>(info->dlpi_addr + r.r_offset);
+            void* current = *got;
+            ctx->found_got = got;
+            ctx->found_original = current;
+            ctx->base = static_cast<uintptr_t>(info->dlpi_addr);
+            ctx->path = path;
+            const long page_size = sysconf(_SC_PAGESIZE);
+            if (page_size <= 0) { ctx->error = "invalid_page_size"; return true; }
+            uintptr_t page = reinterpret_cast<uintptr_t>(got) & ~(static_cast<uintptr_t>(page_size) - 1u);
+            if (mprotect(reinterpret_cast<void*>(page), static_cast<size_t>(page_size), PROT_READ | PROT_WRITE) != 0) {
+                ctx->error = "got_mprotect_rw_failed";
+                return true;
+            }
+            *got = ctx->replacement;
+            __builtin___clear_cache(reinterpret_cast<char*>(got), reinterpret_cast<char*>(got) + sizeof(void*));
+            ctx->value_after_patch = *got;
+            if (ctx->original_out) *ctx->original_out = current;
+            if (ctx->value_after_patch != ctx->replacement) {
+                ctx->error = "got_readback_mismatch";
+                return true;
+            }
+            ctx->success = true;
+            return true;
         }
-        *got = ctx->replacement;
-        __builtin___clear_cache(reinterpret_cast<char*>(got), reinterpret_cast<char*>(got) + sizeof(void*));
-        ctx->value_after_patch = *got;
-        // Keep the page writable. Changing a shared GOT page back to read-only can
-        // interfere with other relocations or runtime writes in the same page.
-        if (ctx->original_out) *ctx->original_out = current;
-        if (ctx->value_after_patch != ctx->replacement) {
-            ctx->error = "got_readback_mismatch";
-            return 1;
-        }
-        ctx->success = true;
-        return 1;
-    }
+        return false;
+    };
 
+    // PLT imports are checked first; some Android builds place function imports
+    // in the general .rela.dyn table as GLOB_DAT instead of .rela.plt.
+    if (scan_relocations(jmprel, jmprel_size, true)) return 1;
+    if (scan_relocations(rela, rela_size, false)) return 1;
     ctx->error = "symbol_relocation_not_found";
     return 1;
 }

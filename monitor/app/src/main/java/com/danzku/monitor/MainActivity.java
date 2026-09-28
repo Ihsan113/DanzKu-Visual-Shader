@@ -505,6 +505,8 @@ public class MainActivity extends Activity {
         addFloatControl("Motion Cost", "poco_m5_motion_cost", 0.55f, 1f, 0.82f, "", "", "%.2f");
 
         addSectionHeader("COLOR & TEXTURE");
+        addToggle("Color Master", "color_master");
+        addToggle("Texture Master", "texture_master");
         addSaturationControl();
         addFloatControl("Vibrance", "vibrance", 0.0f, 1.0f, 0.20f, "vibranceSeekBar", "vibranceValueLabel", "0.00");
         addFloatControl("Anisotropic Visual Enhancement", "anisotropic_enhancement", 0.0f, 16.0f, 0.0f, "anisotropicSeekBar", "anisotropicValueLabel", "0.0");
@@ -1087,10 +1089,8 @@ public class MainActivity extends Activity {
                 || "poco_m5_motion_cost".equals(key)) return "poco_m5_tuning";
 
         // Global color/texture controls.
-        if ("vibrance".equals(key) || "saturation".equals(key)
-                || "anisotropic_enhancement".equals(key)
-                || "adaptive_texture_enhancement".equals(key)
-                || "hdr_enhancement".equals(key)) return "enabled";
+        if ("vibrance".equals(key) || "saturation".equals(key) || "hdr_enhancement".equals(key)) return "color_master";
+        if ("anisotropic_enhancement".equals(key) || "adaptive_texture_enhancement".equals(key)) return "texture_master";
         return null;
     }
 

@@ -8,3 +8,13 @@ monitor_config_editor_present=PASS
 monitor_native_bridge_paths=/data/local/tmp/danzku_visual_config,/data/local/tmp/danzku_visual_engine
 native_rendering_source_changed=NO
 local_android_gradle_build=NOT_AVAILABLE
+
+STAGE1_FOLLOWUP
+color_master_ui=PASS
+texture_master_ui=PASS
+color_master_native_config_report=PASS
+texture_master_native_config_report=PASS
+visual_proof_bypass_new_family_uniform_gates=PASS
+native_build=NOT_RUN
+android_apk_build=NOT_RUN
+runtime_visual_verification=NOT_RUN

@@ -172,3 +172,15 @@ print('source=clean')
 print('config_keys=', len(keys))
 print('v5_features=advanced_aa,shadow,ao,specular,reflection,lighting,effects')
 print('stale_v32_tokens=0')
+# Stage 1 master-switch and bypass wiring checks.
+ui = (root / 'monitor/app/src/main/java/com/danzku/monitor/MainActivity.java').read_text()
+for token in ['color_master', 'texture_master']:
+    if token not in ui or token not in src or token not in cfg:
+        print(f'VALIDATION=FAIL\nERROR: missing Stage 1 master wiring: {token}')
+        sys.exit(1)
+for token in ['g_ai_reconstruction_v6_uniform, visual_proof_bypass ? 0.0f', 'g_v9_reconstruction_uniform, visual_proof_bypass ? 0.0f']:
+    if token not in src:
+        print(f'VALIDATION=FAIL\nERROR: missing bypass gate: {token}')
+        sys.exit(1)
+print('stage1_color_texture_masters=PASS')
+print('stage1_bypass_gates=PASS')

@@ -23,24 +23,22 @@
 #include <string>
 #include <pthread.h>
 #include "zygisk.hpp"
+#include "danzku_ss.h"
 
 // V2.62 GLES call telemetry state (declared before periodic report use).
-using BindFramebufferFn = void (GL_APIENTRY *)(GLenum, GLuint);
-using ViewportFn = void (GL_APIENTRY *)(GLint, GLint, GLsizei, GLsizei);
-static BindFramebufferFn g_orig_glBindFramebuffer = nullptr;
-static ViewportFn g_orig_glViewport = nullptr;
+// Stage 3: GLES interception now lives in danzku_ss.cpp (dz_ss::wrapper_for).
+using DlsymFn = void* (*)(void*, const char*);
+static DlsymFn g_orig_dlsym = nullptr;
+static volatile unsigned long long g_dlsym_calls = 0;
+static volatile unsigned long long g_dlsym_gl_calls = 0;
 using EglGetProcAddressFn = __eglMustCastToProperFunctionPointerType (*)(const char*);
 static EglGetProcAddressFn g_orig_eglGetProcAddress = nullptr;
 static volatile unsigned long long g_egl_get_proc_calls = 0;
-static volatile unsigned long long g_egl_bind_requests = 0;
-static volatile unsigned long long g_egl_viewport_requests = 0;
 static pthread_mutex_t g_egl_name_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char g_egl_last_proc_name[128] = "";
-static volatile unsigned long long g_gl_bind_framebuffer_calls = 0;
-static volatile unsigned long long g_gl_viewport_calls = 0;
-static volatile unsigned int g_gl_last_framebuffer_target = 0;
-static volatile unsigned int g_gl_last_framebuffer = 0;
-static volatile int g_gl_last_viewport[4] = {0, 0, 0, 0};
+static bool g_ss_enabled_value = true;
+static float g_ss_scale_value = 1.25f;
+static int g_ss_max_pixels_value = 4200000;
 
 static JNIEnv* g_env = nullptr;
 static bool g_target = false;
@@ -727,6 +725,9 @@ static void parse_v27_config() {
             else if (key == "edge_threshold") g_v295_edge_threshold_value = strtof(val.c_str(), nullptr);
             else if (key == "edge_softness") g_v295_edge_softness_value = strtof(val.c_str(), nullptr);
             else if (key == "reconstruction_output") { g_v27_reconstruction_output_value = (atoi(val.c_str()) != 0); g_v27_config_reconstruction_key_seen = 1; }
+            else if (key == "true_supersampling") g_ss_enabled_value = (atoi(val.c_str()) != 0);
+            else if (key == "supersampling_scale") g_ss_scale_value = strtof(val.c_str(), nullptr);
+            else if (key == "supersampling_max_pixels") g_ss_max_pixels_value = atoi(val.c_str());
             else if (key == "visual_proof") g_v26_visual_proof_value = (atoi(val.c_str()) != 0);
             else if (key == "visual_proof_bypass") g_v26_visual_proof_bypass = (atoi(val.c_str()) != 0);
             else if (key == "reconstruction") g_v30_reconstruction_value = strtof(val.c_str(), nullptr);
@@ -815,7 +816,7 @@ static void parse_v27_config() {
                 key == "motion_threshold" || key == "motion_softness" || key == "material_detail" ||
                 key == "local_contrast" || key == "highlight_refine" || key == "shadow_refine" ||
                 key == "edge_aware" || key == "edge_strength" || key == "edge_threshold" ||
-                key == "edge_softness" || key == "reconstruction_output" || key == "visual_proof" || key == "visual_proof_bypass" || key == "reconstruction" ||
+                key == "edge_softness" || key == "reconstruction_output" || key == "true_supersampling" || key == "supersampling_scale" || key == "supersampling_max_pixels" || key == "visual_proof" || key == "visual_proof_bypass" || key == "reconstruction" ||
                 key == "dynamic_quality" || key == "quality_min" || key == "quality_max" ||
                 key == "temporal_detail_recovery" || key == "recovery_strength" || key == "recovery_threshold" ||
                 key == "reconstruction_confidence" || key == "confidence_strength" || key == "confidence_threshold" ||
@@ -833,6 +834,10 @@ static void parse_v27_config() {
         }
         start = end + 1;
     }
+    if (!(g_ss_scale_value >= 1.0f)) g_ss_scale_value = 1.0f;
+    if (g_ss_scale_value > 2.0f) g_ss_scale_value = 2.0f;
+    if (g_ss_max_pixels_value < 1000000) g_ss_max_pixels_value = 1000000;
+    if (g_ss_max_pixels_value > 8000000) g_ss_max_pixels_value = 8000000;
     if (g_v27_sharpen_value < 0.0f) g_v27_sharpen_value = 0.0f;
     if (g_v27_sharpen_value > 0.50f) g_v27_sharpen_value = 0.50f;
     if (g_v27_clarity_value < 0.0f) g_v27_clarity_value = 0.0f;
@@ -2460,6 +2465,17 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     if (config_changed) v27_write_runtime_report();
     if (g_v27_enabled_value) update_fps_telemetry();
     ++g_hook_calls;
+    {
+        dz_ss::Options ss_opt;
+        ss_opt.enabled = g_v27_enabled_value && g_ss_enabled_value;
+        ss_opt.scale = g_ss_scale_value;
+        ss_opt.max_pixels = g_ss_max_pixels_value;
+        ss_opt.logging = g_v27_logging_value;
+        dz_ss::set_options(ss_opt);
+    }
+    // True Supersampling: downsample the supersampled render target into the real
+    // default framebuffer BEFORE any DanzKu post-processing reads FB 0.
+    dz_ss::pre_swap(dpy, surface);
     // Read-only state snapshot every 120 swaps. This is swap-time telemetry,
     // not a per-call glBindFramebuffer/glViewport hook.
     static volatile bool probe_done = false;
@@ -2473,23 +2489,13 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
         report += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\n";
         report += "probe_interval_frames=120\n";
         append_egl_gl_probe(report, dpy, surface);
-        report += "gles_bind_framebuffer_hooked=" + std::string(g_orig_glBindFramebuffer ? "YES" : "NO") + "\n";
-        report += "gles_viewport_hooked=" + std::string(g_orig_glViewport ? "YES" : "NO") + "\n";
-        report += "gles_bind_framebuffer_calls=" + std::to_string(__atomic_load_n(&g_gl_bind_framebuffer_calls, __ATOMIC_RELAXED)) + "\n";
-        report += "gles_viewport_calls=" + std::to_string(__atomic_load_n(&g_gl_viewport_calls, __ATOMIC_RELAXED)) + "\n";
         report += "egl_get_proc_calls=" + std::to_string(__atomic_load_n(&g_egl_get_proc_calls, __ATOMIC_RELAXED)) + "\n";
-        report += "egl_bind_framebuffer_requests=" + std::to_string(__atomic_load_n(&g_egl_bind_requests, __ATOMIC_RELAXED)) + "\n";
-        report += "egl_viewport_requests=" + std::to_string(__atomic_load_n(&g_egl_viewport_requests, __ATOMIC_RELAXED)) + "\n";
+        report += "dlsym_calls=" + std::to_string(__atomic_load_n(&g_dlsym_calls, __ATOMIC_RELAXED)) + "\n";
+        report += "dlsym_gl_calls=" + std::to_string(__atomic_load_n(&g_dlsym_gl_calls, __ATOMIC_RELAXED)) + "\n";
         pthread_mutex_lock(&g_egl_name_mutex);
         report += std::string("egl_last_proc_name=") + g_egl_last_proc_name + "\n";
         pthread_mutex_unlock(&g_egl_name_mutex);
-        report += "gles_last_framebuffer_target=" + std::to_string(__atomic_load_n(&g_gl_last_framebuffer_target, __ATOMIC_RELAXED)) + "\n";
-        report += "gles_last_framebuffer=" + std::to_string(__atomic_load_n(&g_gl_last_framebuffer, __ATOMIC_RELAXED)) + "\n";
-        report += "gles_last_viewport=" +
-            std::to_string(__atomic_load_n(&g_gl_last_viewport[0], __ATOMIC_RELAXED)) + "," +
-            std::to_string(__atomic_load_n(&g_gl_last_viewport[1], __ATOMIC_RELAXED)) + "," +
-            std::to_string(__atomic_load_n(&g_gl_last_viewport[2], __ATOMIC_RELAXED)) + "," +
-            std::to_string(__atomic_load_n(&g_gl_last_viewport[3], __ATOMIC_RELAXED)) + "\n";
+        report += "probe_note=state_after_ss_resolve (see danzku_ss_<pid>.txt for supersampling evidence)\n";
         if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v261_" + std::to_string((int)getpid()) + ".txt", report);
         EGLint w=0,h=0;
         if (eglQuerySurface(dpy, surface, EGL_WIDTH, &w) != EGL_TRUE) w=0;
@@ -2551,8 +2557,11 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     if (g_v27_initialized && g_v27_enabled_value) {
         v27_process_frame(surface);
     }
-    if (g_orig_eglSwapBuffers) return g_orig_eglSwapBuffers(dpy, surface);
-    return EGL_FALSE;
+    EGLBoolean swap_result = EGL_FALSE;
+    if (g_orig_eglSwapBuffers) swap_result = g_orig_eglSwapBuffers(dpy, surface);
+    // Hand the game its (redirected) render state back, engage/disengage as needed.
+    dz_ss::post_swap(dpy, surface, swap_result);
+    return swap_result;
 }
 
 static std::string hex_ptr(const void* p) {
@@ -2604,9 +2613,8 @@ static bool parse_map_identity(const char* needle, dev_t& dev, ino_t& ino, std::
 }
 
 
-// V2.62 GLES call telemetry. Observe imported libunity calls without changing arguments.
-static void GL_APIENTRY hooked_glBindFramebuffer(GLenum target, GLuint framebuffer);
-static void GL_APIENTRY hooked_glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
+// Stage 3: eglGetProcAddress / dlsym interception. Both are forwarded to the real
+// implementation first; only the GLES entry points handled by danzku_ss.cpp are replaced.
 static __eglMustCastToProperFunctionPointerType hooked_eglGetProcAddress(const char* name) {
     if (!g_orig_eglGetProcAddress) return nullptr;
     __atomic_add_fetch(&g_egl_get_proc_calls, 1ULL, __ATOMIC_RELAXED);
@@ -2615,32 +2623,18 @@ static __eglMustCastToProperFunctionPointerType hooked_eglGetProcAddress(const c
     pthread_mutex_unlock(&g_egl_name_mutex);
     auto proc = g_orig_eglGetProcAddress(name);
     if (!name || !proc) return proc;
-    if (strcmp(name, "glBindFramebuffer") == 0) {
-        __atomic_add_fetch(&g_egl_bind_requests, 1ULL, __ATOMIC_RELAXED);
-        if (!g_orig_glBindFramebuffer) g_orig_glBindFramebuffer = reinterpret_cast<BindFramebufferFn>(proc);
-        return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(hooked_glBindFramebuffer);
-    }
-    if (strcmp(name, "glViewport") == 0) {
-        __atomic_add_fetch(&g_egl_viewport_requests, 1ULL, __ATOMIC_RELAXED);
-        if (!g_orig_glViewport) g_orig_glViewport = reinterpret_cast<ViewportFn>(proc);
-        return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(hooked_glViewport);
-    }
-    return proc;
+    void* wrapper = dz_ss::wrapper_for(name, dz_ss::SRC_PROC, reinterpret_cast<void*>(proc));
+    return wrapper ? reinterpret_cast<__eglMustCastToProperFunctionPointerType>(wrapper) : proc;
 }
 
-static void GL_APIENTRY hooked_glBindFramebuffer(GLenum target, GLuint framebuffer) {
-    __atomic_add_fetch(&g_gl_bind_framebuffer_calls, 1ULL, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_gl_last_framebuffer_target, static_cast<unsigned int>(target), __ATOMIC_RELAXED);
-    __atomic_store_n(&g_gl_last_framebuffer, static_cast<unsigned int>(framebuffer), __ATOMIC_RELAXED);
-    if (g_orig_glBindFramebuffer) g_orig_glBindFramebuffer(target, framebuffer);
-}
-static void GL_APIENTRY hooked_glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
-    __atomic_add_fetch(&g_gl_viewport_calls, 1ULL, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_gl_last_viewport[0], x, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_gl_last_viewport[1], y, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_gl_last_viewport[2], width, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_gl_last_viewport[3], height, __ATOMIC_RELAXED);
-    if (g_orig_glViewport) g_orig_glViewport(x, y, width, height);
+static void* hooked_dlsym(void* handle, const char* name) {
+    if (!g_orig_dlsym) return nullptr;
+    void* sym = g_orig_dlsym(handle, name);
+    __atomic_add_fetch(&g_dlsym_calls, 1ULL, __ATOMIC_RELAXED);
+    if (!sym || !name || name[0] != 'g' || name[1] != 'l') return sym;
+    __atomic_add_fetch(&g_dlsym_gl_calls, 1ULL, __ATOMIC_RELAXED);
+    void* wrapper = dz_ss::wrapper_for(name, dz_ss::SRC_DLSYM, sym);
+    return wrapper ? wrapper : sym;
 }
 
 struct GotPatchContext {
@@ -2869,31 +2863,30 @@ public:
             bool ok = install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after);
             g_hook_installed = ok && g_orig_eglSwapBuffers != nullptr;
             if (g_hook_installed) {
-                std::string bind_detail, viewport_detail;
-                void* bind_got = nullptr;
-                void* viewport_got = nullptr;
-                install_gles_got_hook("glBindFramebuffer", reinterpret_cast<void*>(hooked_glBindFramebuffer),
-                    reinterpret_cast<void**>(&g_orig_glBindFramebuffer), &bind_got, bind_detail);
-                install_gles_got_hook("glViewport", reinterpret_cast<void*>(hooked_glViewport),
-                    reinterpret_cast<void**>(&g_orig_glViewport), &viewport_got, viewport_detail);
-                std::string proc_detail;
+                std::string proc_detail, dlsym_detail;
                 void* proc_got = nullptr;
-                void* proc_after = nullptr;
+                void* dlsym_got = nullptr;
                 g_orig_eglGetProcAddress = nullptr;
+                g_orig_dlsym = nullptr;
                 bool proc_ok = install_gles_got_hook("eglGetProcAddress",
                     reinterpret_cast<void*>(hooked_eglGetProcAddress),
                     reinterpret_cast<void**>(&g_orig_eglGetProcAddress), &proc_got, proc_detail);
+                bool dlsym_ok = install_gles_got_hook("dlsym",
+                    reinterpret_cast<void*>(hooked_dlsym),
+                    reinterpret_cast<void**>(&g_orig_dlsym), &dlsym_got, dlsym_detail);
+                dz_ss::note_hook_install("eglGetProcAddress", proc_ok, proc_detail.c_str());
+                dz_ss::note_hook_install("dlsym", dlsym_ok, dlsym_detail.c_str());
+                dz_ss::set_report_path(g_app_files_dir + "/danzku_ss_" + std::to_string((int)getpid()) + ".txt");
                 if (g_v27_logging_value) {
-                    std::string telemetry = "stage=v262_gles_hook_install\n";
+                    std::string telemetry = "stage=v300_gles_hook_install\n";
                     telemetry += "pid=" + std::to_string((int)getpid()) + "\n";
-                    telemetry += "glBindFramebuffer=" + bind_detail + "\n";
-                    telemetry += "glBindFramebuffer_got=" + hex_ptr(bind_got) + "\n";
-                    telemetry += "glViewport=" + viewport_detail + "\n";
-                    telemetry += "glViewport_got=" + hex_ptr(viewport_got) + "\n";
                     telemetry += "eglGetProcAddress=" + proc_detail + "\n";
                     telemetry += "eglGetProcAddress_got=" + hex_ptr(proc_got) + "\n";
                     telemetry += "eglGetProcAddress_hooked=" + std::string(proc_ok ? "YES" : "NO") + "\n";
-                    write_file(g_app_files_dir + "/danzku_v262_gles_hook_" + std::to_string((int)getpid()) + ".txt", telemetry);
+                    telemetry += "dlsym=" + dlsym_detail + "\n";
+                    telemetry += "dlsym_got=" + hex_ptr(dlsym_got) + "\n";
+                    telemetry += "dlsym_hooked=" + std::string(dlsym_ok ? "YES" : "NO") + "\n";
+                    write_file(g_app_files_dir + "/danzku_v300_gles_hook_" + std::to_string((int)getpid()) + ".txt", telemetry);
                 }
             }
             if (ok) {

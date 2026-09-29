@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(danzku_shader)
 
-add_library(danzku_shader SHARED native/danzku_shader.cpp)
+add_library(danzku_shader SHARED
+    native/danzku_shader.cpp
+    native/danzku_ss.cpp
+)
 
 target_include_directories(danzku_shader PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/jni

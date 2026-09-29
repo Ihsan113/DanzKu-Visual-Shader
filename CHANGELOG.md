@@ -1,3 +1,46 @@
+# Stage 3 — True Supersampling (native/danzku_ss.{h,cpp})
+
+- Root cause found: the old glBindFramebuffer/glViewport hook only scanned
+  libunity.so's GOT relocations, but Unity resolves those functions via
+  eglGetProcAddress/dlsym at runtime instead of importing them — so the scan
+  could never find anything (symbol_relocation_not_found / *_got=0x0 every
+  run, regardless of eglGetProcAddress itself being hooked successfully).
+- Implements the actual redirect: eglGetProcAddress AND dlsym on libunity.so
+  now both hand back wrappers for ~19 GLES entry points instead of only
+  counting requests. A best-effort scan of Unity's writable data segments for
+  stale pointer copies runs as a secondary safety net.
+- Adds a private FBO sized `supersampling_scale`x the EGL surface
+  (RGBA8 + matching depth/stencil), only engaged once
+  glCheckFramebufferStatus reports GL_FRAMEBUFFER_COMPLETE. All calls the
+  game uses to address/query the default framebuffer
+  (bind/viewport/scissor/blit/invalidate/drawbuffers/readbuffer/getintegerv)
+  are redirected so the game keeps seeing its own 1902x853-class values
+  while the driver renders at the larger target.
+- Downsamples the supersampled target into the real framebuffer 0 right
+  before eglSwapBuffers with a 4-tap box-filter shader (GL_LINEAR blit
+  fallback if the shader fails), saving/restoring every piece of GL state it
+  touches. The existing DanzKu reconstruction pipeline runs unchanged
+  afterward, on the now-downsampled image.
+- New config keys: `true_supersampling`, `supersampling_scale`,
+  `supersampling_max_pixels` (module/config/visual.conf).
+- Fails closed and reports why (ss_fail_reason / ss_fallback_reason) on:
+  missing GLES functions, incomplete FBO, GL errors during setup, an illegal
+  scaled depth/stencil blit, a read-back of the default framebuffer
+  (unsupported while redirected), or the driver's real FB0 being bound at
+  swap time through a GLES pointer this patch did not intercept
+  (ss_bypass_frames / wrappers_bypassed_game_draws_to_real_fb0). Goes sticky
+  FAILED (no further engage attempts) after 3 disengages; context loss and
+  surface resizes are treated as benign re-engage, not counted toward that.
+- New telemetry file `danzku_ss_<pid>.txt`: per-symbol proc/dlsym request and
+  wrapper-call counts, FBO status, render vs output resolution, evidence of
+  draws landing in the supersampled target vs. other FBOs, resolve
+  success/error counts. See BUILD_AND_TEST.md section 5 for how to read it.
+- New host-only test harness `tests/ss_host_test.cpp` (mocked GLES/EGL, 42
+  assertions) validates the redirect/resolve/fallback logic without a
+  device. Device runtime testing is still required — see
+  STAGE3_IMPLEMENTATION_NOTES.txt sections 3-4 for exactly what is and is
+  not proven yet.
+
 # V5.2.26
 
 - Adds Visual Proof A/B telemetry and baseline bypass.

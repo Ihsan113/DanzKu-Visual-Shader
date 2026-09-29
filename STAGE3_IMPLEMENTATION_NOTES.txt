@@ -1,52 +1,205 @@
-DANZKU VISUAL SHADER - STAGE 3 STATUS
+DANZKU VISUAL SHADER - STAGE 3 STATUS (True Supersampling)
+Build: v264 base + native/danzku_ss.{h,cpp} (this patch)
 
-APK UI FIX
-- Saturation Pop SeekBar is registered as a dependent control of color_master.
-- Its enabled state requires both global engine enabled and color_master enabled.
-- Disabled alpha is 0.38.
-- Existing config write and native sync behavior is unchanged.
+====================================================================
+0. WHY THE OLD APPROACH FAILED (root cause, from auditing the v264 ZIP)
+====================================================================
+The previous hook only targeted glBindFramebuffer/glViewport via a libunity.so
+GOT *relocation* scan. GOT relocations only exist for symbols libunity.so
+imports directly from the dynamic linker at load time. Unity does not import
+GLES functions that way: it calls eglGetProcAddress("glBindFramebuffer") /
+eglGetProcAddress("glViewport") itself (or dlsym on libGLESv2/libGLESv3) and
+stores the returned pointers in its own internal function-pointer tables.
+Those tables live inside Unity's data segments, not in the ELF relocation
+section, so a GOT-relocation scan can never find them - hence
+"symbol_relocation_not_found" / "..._got=0x0" every time, regardless of how
+many probe runs were done. The eglGetProcAddress hook itself worked
+(got_patch_ok), it just was not being used to intercept anything yet
+(egl_bind_framebuffer_requests=0 confirms Unity called eglGetProcAddress 17
+times for other symbols, but the two we cared about were never requested
+through the one path we were watching).
 
-GLES DIAGNOSTICS PRESENT IN SOURCE
-- The existing hooked_eglSwapBuffers() runs a one-time, read-only EGL/GLES state probe.
-- Probe records current EGL context, surface dimensions, GLES version/renderer/vendor,
-  GL_FRAMEBUFFER_BINDING, GL_VIEWPORT, GL_MAX_TEXTURE_SIZE, and GL error.
-- Probe report is written as danzku_v261_<pid>.txt when logging is enabled.
-- This is a state probe at swap time, NOT a hook on glBindFramebuffer/glViewport,
-  and it does not capture every GL call or prove the game's pre-draw call sequence.
+====================================================================
+1. WHAT THIS PATCH ACTUALLY DOES
+====================================================================
+New files: app/native/danzku_ss.h, app/native/danzku_ss.cpp (self contained,
+added to CMakeLists.txt). danzku_shader.cpp is wired to it in three places:
+config parsing (true_supersampling / supersampling_scale /
+supersampling_max_pixels), the libunity.so GOT hooks (now eglGetProcAddress
+AND dlsym, both wrapping GLES pointers instead of only counting them), and
+the eglSwapBuffers hook (dz_ss::pre_swap before the real swap, dz_ss::post_swap
+after it).
 
-RENDER-TARGET REDIRECT / TRUE SUPERSAMPLING
-- Not implemented.
-- Existing processing is invoked from eglSwapBuffers after the game has rendered.
-- The source does not establish a safe point to redirect the game's render target.
-- Do not treat a larger DanzKu texture or a swap-time GL state probe as true supersampling.
-- A per-call GLES hook would require a separately validated interception mechanism,
-  thread/context-safe logging, state preservation, and a tested fallback. It was not
-  added because the current source does not provide a validated hook backend for it.
+Mechanism, matching the two paths Unity actually uses to obtain GLES pointers:
+  * eglGetProcAddress hook (existing GOT patch, now functional): every
+    returned pointer is checked against a fixed list of ~19 GLES entry points
+    (glBindFramebuffer, glViewport, glScissor, glBlitFramebuffer, the
+    invalidate/discard family, glDrawBuffers, glReadBuffer, glGetIntegerv,
+    glReadPixels, the copy-tex-image family, and the five draw-call
+    functions). If the real function resolved, the wrapper is handed back
+    instead; the game never notices.
+  * dlsym hook (new GOT patch on "dlsym" itself): Unity may instead call
+    dlsym() against a libGLESv2/v3 handle. Same substitution logic.
+  * Because Unity typically calls both eglGetProcAddress and dlsym for the
+    same symbol once during EGL context setup and caches the pointer
+    afterward, either path being hooked is enough - the source no longer
+    depends on GOT-relocation scanning for these functions at all.
+  * A best-effort third path - scanning writable Unity data segments for
+    literal copies of the previously-seen pointer values and patching them
+    in place (dz_ss::patch_tables(), called once at engage and a few more
+    times over the next frames) - is also present as defence in depth, in
+    case Unity resolved a pointer before our hook was installed. It only
+    patches addresses that map to exactly one wrapped function (ambiguous
+    matches are skipped) and only touches pages /proc/self/maps reports as
+    readable.
 
-BUILD / TEST STATUS
-- Source archive includes the APK UI fix and this Stage 3 status note.
-- Android APK build and device runtime verification were not run in this environment.
+Render-target redirect (app/native/danzku_ss.cpp):
+  * On the first swap after the config is enabled, once the driver reports
+    the default framebuffer is bound (GL_DRAW/READ_FRAMEBUFFER_BINDING == 0,
+    i.e. we are at a clean per-frame boundary), the engine allocates an FBO
+    sized surface_w*scale x surface_h*scale (RGBA8 color + matching
+    depth/stencil, chosen from the values the real context already reports),
+    checks glCheckFramebufferStatus, and only engages if it is
+    GL_FRAMEBUFFER_COMPLETE.
+  * From then on, every wrapped glBindFramebuffer(..., 0) call is redirected
+    to that FBO. glViewport/glScissor/glBlitFramebuffer/glGetIntegerv/
+    glInvalidateFramebuffer/glDrawBuffers/glReadBuffer are all rewritten so
+    the *game* still believes it is driving a normal 1902x853-class default
+    framebuffer (queries return its own values back), while the *driver*
+    is actually driving the larger target. glDrawArrays*/glDrawElements* are
+    instrumented (not rewritten) purely to prove where pixels actually landed.
+  * Right before eglSwapBuffers, dz_ss::pre_swap() runs a single fullscreen
+    pass that samples the supersampled color texture with a 4-tap box filter
+    (falls back to a GL_LINEAR glBlitFramebuffer if the resolve shader fails
+    to compile/link) into the *real* framebuffer 0, at the real EGL surface
+    size. All GL state touched by the resolve (program, VAO, texture unit 0,
+    blend/depth/cull/stencil/etc., color mask) is saved before and restored
+    after, and depth/stencil on the supersampled target is invalidated
+    afterward so the driver does not have to write it back to memory.
+    Existing DanzKu shader/reconstruction stages then run unchanged on this
+    already-downsampled image, exactly as before this patch.
+  * dz_ss::post_swap() then hands the game back its own state on framebuffer
+    0 (so the next frame is unaffected by anything the resolve pass touched).
 
+Bypass / safety guard: if, at pre_swap time, the driver's actual
+GL_DRAW_FRAMEBUFFER_BINDING is 0 (the real default framebuffer) rather than
+our FBO, that means the game reached framebuffer 0 through a GLES pointer we
+did not intercept (a path neither hooked eglGetProcAddress nor dlsym
+provided). The engine skips the resolve for that frame rather than blitting
+stale supersampled content over the real frame, counts it as a
+"ss_bypass_frames" event, and disengages after 3 consecutive occurrences
+(ss_fallback_reason=wrappers_bypassed_game_draws_to_real_fb0). This can only
+be confirmed on-device; it is exercised on the host by ss_host_test.cpp
+scenario [11].
 
-Periodic probe update: EGL/GLES swap-time snapshot refreshes on the first hooked swap and then every 120 hooked swaps. This is not a per-call GLES hook, does not record intermediate framebuffer transitions, and does not implement framebuffer redirection or true supersampling. Build and device runtime validation are required.
+Failure handling: any of - missing a required GLES function after resolving,
+incomplete FBO, GL error during resource creation, a blit that would scale a
+depth/stencil attachment (illegal in ES 3.x - depth/stencil is stripped from
+that blit and a fallback is requested), a read-back of framebuffer 0
+(glReadPixels/glCopyTex*Image* - genuinely unsupported while redirected,
+since the real FB0 only holds the last resolved frame, not the current one),
+or 3 consecutive failed resolves - disengages the redirect and returns
+control to the game's original framebuffer/viewport/scissor state on the
+same frame. After 3 disengages the module goes to a sticky FAILED state for
+that process's lifetime (no further engage attempts, all wrapper lookups
+return null so the eglGetProcAddress/dlsym hooks become transparent
+pass-through). A context loss or a surface resize is treated as a benign
+disengage-and-re-engage rather than counting toward that limit.
 
-V2.63 EGL PROC ADDRESS INTERCEPTION PATCH
-- Added a libunity.so GOT hook for eglGetProcAddress as a fallback when direct
-  glBindFramebuffer/glViewport imports are absent.
-- The wrapper forwards every request to the original eglGetProcAddress and only
-  substitutes the returned pointer for glBindFramebuffer and glViewport.
-- The substituted wrappers preserve arguments and forward calls to the resolved
-  original GLES function; they collect call counters and last arguments.
-- Install telemetry now reports eglGetProcAddress hook status and GOT address.
-- This is an interception/telemetry patch only. It does NOT redirect the game's
-  framebuffer, change viewport dimensions, or implement true supersampling.
-- Runtime success depends on Unity requesting the functions after installation;
-  device verification is still required. Android native build was not run here.
+====================================================================
+2. WHAT IS *NOT* CLAIMED
+====================================================================
+* Compatibility with any game other than Mobile Legends (com.mobile.legends)
+  has not been tested and is not claimed. The redirect logic is written
+  against the general ES 3.x FBO/viewport/scissor model, not anything
+  Mobile-Legends-specific, but Unity engine version, render-pipeline
+  differences (e.g. Scriptable Render Pipeline titles doing more with
+  MRTs/DrawBuffers) or non-Unity engines could expose GLES entry points this
+  patch does not wrap.
+* The pointer-table scan (dz_ss::patch_tables) is best-effort. It cannot
+  prove it caught every copy of a stale pointer Unity may have taken before
+  hooks were installed; the eglGetProcAddress/dlsym interception is the
+  primary, provable mechanism, and the scan is defence in depth only.
+* None of this has been run on the POCO M5 / Mali-G57 device yet. Section 4
+  below is the exact telemetry to pull to confirm or refute it there.
 
+====================================================================
+3. BUILD STATUS IN THIS ENVIRONMENT
+====================================================================
+* No Android NDK/SDK is available in this container (no network access to
+  Google's Android repositories), so `cmake --build` for the arm64-v8a
+  target and the Gradle/Magisk module build were NOT run here. This ZIP is
+  source-only; Section 5 below is what to run on a machine with the NDK
+  (or via the existing .github/workflows/build.yml CI) to produce the
+  installable module.
+* Both new/changed C++ files were instead validated on the container's x86-64
+  Linux host:
+    - `g++ -std=c++17 -fsyntax-only` against danzku_shader.cpp (using the
+      project's own jni/ stub headers + the host's EGL/GLES3 dev headers)
+      and against danzku_ss.cpp: both clean (only 2 pre-existing, unrelated
+      warnings in danzku_shader.cpp).
+    - A full link of danzku_shader.cpp + danzku_ss.cpp together (compiled to
+      .o, linked with -ldl) produced no duplicate-symbol / ODR errors - the
+      only linker complaints were "undefined reference to glXxx", which is
+      expected on a host with no libGLESv2.so/libEGL.so; CMakeLists.txt
+      already links danzku_shader against GLESv2/EGL for the real
+      arm64-v8a/Android build.
+    - tests/ss_host_test.cpp: a new, from-scratch host test harness that
+      mocks the entire GLES/EGL surface used by danzku_ss.cpp (framebuffers,
+      viewport/scissor state, draw calls, blits, invalidate calls, EGL
+      context/surface queries) and drives dz_ss::{set_options, wrapper_for,
+      pre_swap, post_swap, report_text} directly. 42 assertions, all passing
+      (`g++ -std=c++17 -DDZ_SS_TEST tests/ss_host_test.cpp
+      app/native/danzku_ss.cpp -o ss_test && ./ss_test`). It confirms the
+      *logic* - redirect mapping, resolve, state save/restore, the bypass
+      guard, fallback/FAILED transitions, scale clamping, resize handling -
+      against a mock GPU. It CANNOT confirm that Mali-G57 / this Unity build
+      actually calls eglGetProcAddress or dlsym for these symbols, that the
+      real driver accepts this exact FBO/format combination, or that frame
+      timing on-device is acceptable. Device runtime testing is still
+      required; do not treat the host test as proof the module works.
 
-V2.63 diagnostic follow-up (2026-09-28)
-- Added periodic telemetry counters for eglGetProcAddress calls and requests
-  for glBindFramebuffer/glViewport.
-- Diagnostic instrumentation only: this does not implement true supersampling,
-  allocate a higher-resolution game framebuffer, or redirect Unity rendering.
-- Build and device runtime validation are still required.
+====================================================================
+4. TESTED vs NOT YET PROVEN (this patch)
+====================================================================
+Tested (host, mocked GPU):
+  - FBO redirect mapping for bind/viewport/scissor/blit/invalidate/
+    drawbuffers/readbuffer/getintegerv, including an offscreen-RT round trip.
+  - Resolve pass renders fullscreen into real FB0 at surface size while
+    reading the supersampled FBO, and restores every piece of GL state it
+    touched.
+  - Evidence counters (draws redirected into the supersampled target vs.
+    other FBOs, per-frame draw counts, offscreen-viewport histogram) update
+    correctly.
+  - Fallback on readpixels-from-FB0; 3 consecutive fallbacks -> sticky
+    FAILED with wrappers returning null; original game state restored in
+    both cases.
+  - Incomplete-FBO and missing-GLES-function paths fail closed without
+    engaging.
+  - Scale is clamped to the configured pixel budget and to
+    GL_MAX_TEXTURE_SIZE/GL_MAX_RENDERBUFFER_SIZE.
+  - Surface resize triggers a clean disengage + re-engage at the new size.
+  - The "wrappers bypassed" guard skips a resolve instead of corrupting the
+    frame when the driver's real FB0 is unexpectedly bound at swap time.
+
+NOT yet proven (needs the phone):
+  - That Mobile Legends' Unity build actually calls eglGetProcAddress and/or
+    dlsym for glBindFramebuffer/glViewport/etc. at all (this was the exact
+    thing the old telemetry showed as zero - this patch's telemetry
+    (ss_fn_BindFramebuffer proc_req=/dlsym_req=/wrapper_calls=) is what
+    answers this on-device).
+  - That the Mali-G57 driver accepts an RGBA8 + DEPTH24_STENCIL8 (or
+    whatever combination the real context reports) render target at
+    ~2378x1066 without excessive memory pressure or stalls.
+  - Real-device frame timing/stability over an extended play session.
+  - Whether the pointer-table scan finds and patches anything in practice,
+    or whether the eglGetProcAddress/dlsym interception alone is sufficient
+    (ss_table_slots_patched_total in the report answers this).
+
+====================================================================
+5. BUILD, INSTALL, AND WHAT TO PULL OFF THE DEVICE
+====================================================================
+See BUILD_AND_TEST.md in the repo root for the exact commands (NDK build,
+Magisk zip layout, adb/Termux install, and the `run-as`/su commands to pull
+danzku_ss_<pid>.txt and read every field this patch adds to the report).
+

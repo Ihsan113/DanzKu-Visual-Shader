@@ -20,8 +20,72 @@ times for other symbols, but the two we cared about were never requested
 through the one path we were watching).
 
 ====================================================================
-1. WHAT THIS PATCH ACTUALLY DOES
+0.1 SECOND ROOT CAUSE, FOUND FROM REAL ON-DEVICE TELEMETRY (2026-09-29)
 ====================================================================
+The design in section 1 was correct, but the FIRST on-device test run
+(danzku_ss_12146.txt, POCO M5, com.mobile.legends) showed the engine still
+going to sticky FAILED (ss_fail_reason=too_many_fallbacks:
+wrappers_bypassed_game_draws_to_real_fb0) after engaging successfully 7
+times. Every ss_fn_* line showed the same pattern:
+
+    ss_fn_BindFramebuffer=proc_req=0 dlsym_req=1 wrapper_calls=0 ...
+    ss_fn_Viewport=proc_req=0 dlsym_req=1 wrapper_calls=0 ...
+    (same for every other wrapped symbol)
+
+dlsym_req=1 (each symbol WAS requested through the hooked dlsym) but
+wrapper_calls=0 (the wrapper was never actually invoked afterward) - i.e.
+Unity's one-and-only dlsym("glBindFramebuffer") call got back the REAL
+pointer, not ours, and cached it forever.
+
+Cause: dz_ss::set_options() - which is what flips Options::enabled to true -
+was previously called ONLY from inside hooked_eglSwapBuffers. That hook only
+fires once a frame has actually been rendered and is being presented, which
+is necessarily AFTER Unity has finished its EGL/context setup and resolved
+its GLES function table via dlsym/eglGetProcAddress. Since Options::enabled
+defaults to false, dz_ss::wrapper_for() correctly (by its own logic) handed
+back nullptr on that first, only resolve, so the hooked_dlsym/
+hooked_eglGetProcAddress wrappers passed through the real pointer instead of
+substituting the wrapper. The GOT hooks on dlsym/eglGetProcAddress
+themselves were installed fine (v300 hook install report: both
+got_patch_ok) - they just had nothing to substitute yet when it mattered.
+
+This also explains why the engine could still show ss_resolve_ok=1116: at
+each successful engage, try_engage()/apply_effective_state() bind and scale
+the FBO/viewport directly against the real driver (not through the wrapper
+path), so rendering lands in the supersampled target for as long as the
+game doesn't rebind framebuffer 0 itself; once it does (using its own
+cached, real, unwrapped pointer - completely invisible to us), the bypass
+guard in pre_swap correctly detects the real FB0 is bound and disengages.
+
+This is also the most likely explanation for the hero-preview/skin-showcase
+screen rendering zoomed in and cropped (see the user-provided screenshot,
+2026-09-29 09:10:57, taken during the same run as danzku_ss_12146.txt):
+try_engage() seeds its "this is the game's full-frame viewport" baseline
+with whatever glGetIntegerv(GL_VIEWPORT) happens to return at the moment it
+engages. On a UI screen that legitimately uses a sub-region viewport for a
+3D preview pane, and with the game's own viewport calls never actually
+reaching our wrapper (per the bug above), that wrong baseline had no way to
+self-correct, and the resolve pass kept blitting/drawing a mis-scaled
+snapshot over the real frame every swap. This has NOT been separately
+confirmed on-device yet (see section 4) - it is the most consistent
+explanation given the evidence, not a proven mechanism.
+
+FIX (this patch): extracted the dz_ss::Options construction into
+sync_ss_options() and call it in two places that both run before
+libunity.so has any realistic chance to have loaded, let alone resolved any
+GLES pointers:
+  1. In postAppSpecialize(), immediately after parse_v27_config() - this is
+     the earliest point in the process's life this module runs at all
+     (right after zygote fork/specialize, long before the app's own Java
+     code or native libraries load).
+  2. In hook_worker(), immediately after the eglGetProcAddress/dlsym GOT
+     hooks are confirmed installed - belt-and-suspenders in case of any
+     ordering surprise.
+The existing per-frame call inside hooked_eglSwapBuffers is kept as well,
+so a config change made at runtime (Monitor APK, config file edit) still
+takes effect without a process restart.
+
+
 New files: app/native/danzku_ss.h, app/native/danzku_ss.cpp (self contained,
 added to CMakeLists.txt). danzku_shader.cpp is wired to it in three places:
 config parsing (true_supersampling / supersampling_scale /
@@ -160,9 +224,9 @@ disengage-and-re-engage rather than counting toward that limit.
       required; do not treat the host test as proof the module works.
 
 ====================================================================
-4. TESTED vs NOT YET PROVEN (this patch)
+4. TESTED vs NOT YET PROVEN
 ====================================================================
-Tested (host, mocked GPU):
+Tested (host, mocked GPU, unchanged by the 2026-09-29 fix):
   - FBO redirect mapping for bind/viewport/scissor/blit/invalidate/
     drawbuffers/readbuffer/getintegerv, including an offscreen-RT round trip.
   - Resolve pass renders fullscreen into real FB0 at surface size while
@@ -181,20 +245,51 @@ Tested (host, mocked GPU):
   - Surface resize triggers a clean disengage + re-engage at the new size.
   - The "wrappers bypassed" guard skips a resolve instead of corrupting the
     frame when the driver's real FB0 is unexpectedly bound at swap time.
+  These are all still valid: the 2026-09-29 fix is purely about WHEN
+  dz_ss::set_options() gets called from danzku_shader.cpp, not about the
+  dz_ss engine's own logic, so the host test suite (tests/ss_host_test.cpp,
+  which drives dz_ss directly) needed no changes and still passes 42/42.
 
-NOT yet proven (needs the phone):
-  - That Mobile Legends' Unity build actually calls eglGetProcAddress and/or
-    dlsym for glBindFramebuffer/glViewport/etc. at all (this was the exact
-    thing the old telemetry showed as zero - this patch's telemetry
-    (ss_fn_BindFramebuffer proc_req=/dlsym_req=/wrapper_calls=) is what
-    answers this on-device).
+Tested on-device, first run (POCO M5, com.mobile.legends, 2026-09-29,
+BEFORE this fix - see danzku_ss_12146.txt in files.zip/
+puscepataokshader.zip):
+  - Hooks install successfully (eglGetProcAddress/dlsym both
+    got_patch_ok).
+  - The engine DOES engage (ss_engage_success=7, ss_fbo_gl_error=0x0000)
+    and DOES resolve frames (ss_resolve_ok=1116, ss_resolve_fail=0) when it
+    is engaged - the FBO creation, resolve shader, and state save/restore
+    all work against the real Mali-G57 driver.
+  - Confirmed the section 0.1 bug: every ss_fn_* wrapper shows dlsym_req=1,
+    wrapper_calls=0. dz_ss_calls totals (dlsym_gl_calls=210) confirm Unity
+    does resolve its GL functions through dlsym in general - just not
+    through our wrapper for these specific symbols, because it resolved
+    them before dz_ss::set_options() had ever been called.
+  - Confirmed the resulting sticky FAILED after 3 bypass events.
+
+NOT yet proven (needs a fresh on-device run WITH this fix applied):
+  - That moving sync_ss_options() into postAppSpecialize() actually makes
+    Unity's dlsym/eglGetProcAddress calls for these symbols land on our
+    wrapper this time (ss_fn_BindFramebuffer wrapper_calls should be >0,
+    and ss_redirect_binds/ss_redirect_viewports should be >0 - re-pull
+    danzku_ss_<pid>.txt after a fresh play session and check those fields
+    first, before anything else).
+  - Whether ss_state stays ACTIVE for the whole session once that is fixed,
+    or whether some other GLES entry point this patch does not wrap also
+    needs covering (watch ss_bypass_frames and ss_fallback_reason).
+  - Whether the hero-preview/skin-showcase screen crop/zoom is actually
+    resolved by this fix, or is a separate issue - re-check that screen
+    specifically once wrapper_calls are confirmed >0.
   - That the Mali-G57 driver accepts an RGBA8 + DEPTH24_STENCIL8 (or
     whatever combination the real context reports) render target at
-    ~2378x1066 without excessive memory pressure or stalls.
-  - Real-device frame timing/stability over an extended play session.
-  - Whether the pointer-table scan finds and patches anything in practice,
-    or whether the eglGetProcAddress/dlsym interception alone is sufficient
-    (ss_table_slots_patched_total in the report answers this).
+    ~2378x1066 without excessive memory pressure or stalls over a full
+    match (the first run only reached ss_frames_active=13 before failing).
+  - Real-device frame timing/stability over an extended play session, once
+    the engine can actually stay engaged.
+  - Whether the pointer-table scan finds and patches anything in practice
+    (ss_table_slots_patched_total was 0 on the first run, consistent with
+    the wrapper interception being the thing that was broken - the table
+    scan itself was never exercised meaningfully because the game never
+    called through it after the fact).
 
 ====================================================================
 5. BUILD, INSTALL, AND WHAT TO PULL OFF THE DEVICE

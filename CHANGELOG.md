@@ -1,3 +1,30 @@
+# Stage 3 fix — supersampling engine enabled too late (found from on-device test)
+
+- Root-caused from the first real on-device run (POCO M5, com.mobile.legends):
+  every ss_fn_* wrapper telemetry showed dlsym_req=1, wrapper_calls=0 — Unity
+  resolved glBindFramebuffer/glViewport/etc. via dlsym exactly once, during
+  its own EGL/context setup, before dz_ss::set_options() had ever been
+  called (it previously only fired from inside the eglSwapBuffers hook, i.e.
+  after the first frame). It got the real, unwrapped pointers back and
+  cached them forever — the eglGetProcAddress/dlsym GOT hooks themselves
+  were installed fine, they just had nothing to substitute yet.
+- This was also the direct cause of the sticky FAILED state
+  (wrappers_bypassed_game_draws_to_real_fb0 after 3 occurrences) and is the
+  leading explanation for the hero-preview/skin-showcase screen rendering
+  zoomed in and cropped in the same test run.
+- Fix: extracted the options sync into sync_ss_options() and call it
+  immediately after config parsing in postAppSpecialize() (the earliest
+  point this module runs, well before libunity.so loads) and again right
+  after the eglGetProcAddress/dlsym hooks are confirmed installed in
+  hook_worker(), in addition to the existing per-frame call in the swap
+  hook (kept for live config-reload support).
+- dz_ss.{h,cpp} themselves needed no changes — this was purely an
+  integration/ordering bug in danzku_shader.cpp. tests/ss_host_test.cpp
+  still passes 42/42 unchanged.
+- Not yet re-verified on-device — next test run should check
+  ss_fn_BindFramebuffer/Viewport wrapper_calls (should be >0 now) and
+  ss_redirect_binds/ss_redirect_viewports before anything else.
+
 # Stage 3 — True Supersampling (native/danzku_ss.{h,cpp})
 
 - Root cause found: the old glBindFramebuffer/glViewport hook only scanned

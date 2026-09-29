@@ -2458,6 +2458,35 @@ static void append_egl_gl_probe(std::string& out, EGLDisplay dpy, EGLSurface sur
     out += "gl_error_after_probe=" + std::string(error_buf) + "\n";
 }
 
+// Stage 3 fix (root-caused from on-device telemetry, files.zip/puscepataokshader.zip,
+// 2026-09-29): dz_ss::set_options() used to be called ONLY from inside
+// hooked_eglSwapBuffers below, i.e. it only became enabled once the first frame was
+// actually swapped. But Unity resolves its GLES function pointers via
+// eglGetProcAddress/dlsym during EGL/context setup, well BEFORE the first
+// eglSwapBuffers call, and caches each pointer after resolving it exactly once.
+// Because dz_ss::Options::enabled defaulted to false until that first swap,
+// dz_ss::wrapper_for() handed back the REAL glBindFramebuffer/glViewport/etc.
+// pointers on Unity's one-and-only resolve call, and Unity cached those forever -
+// our hooks were installed correctly (eglGetProcAddress/dlsym GOT patches both
+// report got_patch_ok) but never actually intercepted anything for those symbols.
+// On-device telemetry confirmed this exactly: every ss_fn_* entry showed
+// dlsym_req=1 (requested once) but wrapper_calls=0 (never actually invoked through
+// our wrapper), which is also the root cause of the
+// wrappers_bypassed_game_draws_to_real_fb0 fallback and, most likely, of the
+// hero-preview screen rendering with an incorrectly scaled/cropped viewport.
+// Fix: sync the options (and therefore flip `enabled` on) as soon as the config is
+// parsed and again as soon as the hooks are actually installed, both of which
+// happen before libunity.so has any realistic chance to have already resolved and
+// cached these pointers - not just once per frame afterward.
+static void sync_ss_options() {
+    dz_ss::Options ss_opt;
+    ss_opt.enabled = g_v27_enabled_value && g_ss_enabled_value;
+    ss_opt.scale = g_ss_scale_value;
+    ss_opt.max_pixels = g_ss_max_pixels_value;
+    ss_opt.logging = g_v27_logging_value;
+    dz_ss::set_options(ss_opt);
+}
+
 static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     const bool was_enabled = g_v27_enabled_value;
     const bool config_changed = reload_v27_config_if_changed(false);
@@ -2465,14 +2494,9 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     if (config_changed) v27_write_runtime_report();
     if (g_v27_enabled_value) update_fps_telemetry();
     ++g_hook_calls;
-    {
-        dz_ss::Options ss_opt;
-        ss_opt.enabled = g_v27_enabled_value && g_ss_enabled_value;
-        ss_opt.scale = g_ss_scale_value;
-        ss_opt.max_pixels = g_ss_max_pixels_value;
-        ss_opt.logging = g_v27_logging_value;
-        dz_ss::set_options(ss_opt);
-    }
+    // Still called every swap so a config change made at runtime (Monitor APK,
+    // config file edit + reload) takes effect without needing a process restart.
+    sync_ss_options();
     // True Supersampling: downsample the supersampled render target into the real
     // default framebuffer BEFORE any DanzKu post-processing reads FB 0.
     dz_ss::pre_swap(dpy, surface);
@@ -2824,6 +2848,10 @@ public:
         if (!g_target) return;
         ensure_dir(g_app_files_dir);
         parse_v27_config();
+        // Enable the supersampling engine as early as possible - well before
+        // libunity.so is even loaded, let alone before it resolves its GLES
+        // function pointers. See sync_ss_options() above for why this matters.
+        sync_ss_options();
         cleanup_danzku_files();
         char marker[512] = {};
         snprintf(marker, sizeof(marker), "%s/danzku_v257_post_%d.txt", g_app_files_dir.c_str(), (int)getpid());
@@ -2877,6 +2905,10 @@ public:
                 dz_ss::note_hook_install("eglGetProcAddress", proc_ok, proc_detail.c_str());
                 dz_ss::note_hook_install("dlsym", dlsym_ok, dlsym_detail.c_str());
                 dz_ss::set_report_path(g_app_files_dir + "/danzku_ss_" + std::to_string((int)getpid()) + ".txt");
+                // Belt-and-suspenders: guarantee `enabled` is already true by the moment
+                // these hooks can possibly intercept anything, regardless of whatever
+                // happened (or didn't) in postAppSpecialize for this process.
+                sync_ss_options();
                 if (g_v27_logging_value) {
                     std::string telemetry = "stage=v300_gles_hook_install\n";
                     telemetry += "pid=" + std::to_string((int)getpid()) + "\n";

@@ -135,3 +135,35 @@ Baca urutan ini, bukan cuma `ss_state`:
 
 Kalau butuh screenshot/video pembanding tajam vs blur, bandingkan game
 berjalan dengan `true_supersampling=0` vs `1` di config yang sama.
+
+**Khusus v5.2.27**: ada fix buat bug zoom persisten (bukan crop) yang
+kejadian di layar tertentu — misal layar preview hero/skin — pas
+`supersampling_scale` di atas 1x. Kalau sebelumnya pernah ngalamin ini,
+buka lagi PERSIS layar yang sama dengan scale di atas 1x, dan bandingkan.
+Zoom-nya harusnya udah hilang; kalau masih kejadian, itu tandanya
+mekanismenya beda dari yang diduga (lihat `STAGE3_IMPLEMENTATION_NOTES.txt`
+bagian 0.2) dan perlu telemetry baru buat gali lebih lanjut — jangan lupa
+tetap jalanin `su -c cat .../danzku_ss_<PID>.txt` biar ada data pembanding.
+
+## 6. Build & pasang Monitor APK (opsional, buat toggle/slider + status dari HP)
+
+Monitor APK (`monitor/`) sekarang punya toggle "True Supersampling" + slider
+scale/max-pixels di halaman Runtime, dan panel status-nya nampilin
+`ss_state`, `ss_fallback_reason`, `ss_resolve_ok`, dll — jadi nggak perlu
+`su -c cat ...` manual tiap kali mau ngecek. Build-nya kepisah dari native
+shader di atas:
+
+```bash
+cd monitor
+gradle :app:assembleDebug --no-daemon
+# output: app/build/outputs/apk/debug/app-debug.apk
+```
+
+Atau lewat GitHub Actions: push branch ini, workflow `Build DanzKu Monitor
+APK` di `monitor/.github/workflows/build-apk.yml` otomatis jalan.
+
+Install APK-nya biasa (adb install / transfer ke HP lalu buka), kasih izin
+root (WAJIB — semua baca/tulis config dan status APK ini lewat `su`), lalu
+buka. Toggle/slider Stage 3-nya ada di tab **Runtime**, section "STAGE 3 —
+TRUE SUPERSAMPLING", persis di bawah RAM Optimization/FPS Boost.
+

@@ -2,3 +2,28 @@ DanzKu Monitor APK UI/runtime status fix
 - V9/V10/V11/V12/POCO tuning sliders now depend on their owning feature toggle and Visual Engine master.
 - Runtime status now exposes feature flags, pipeline/output state, runtime-applied values, and config-only temporal/device values.
 - Native shader code is unchanged.
+- Stage 3 True Supersampling: added a toggle + two sliders (scale, max pixels)
+  in the runtime page, following the exact same addSectionHeader/addToggle/
+  addFloatControl pattern as every other feature. Scale/max-pixels sliders
+  depend on the True Supersampling toggle via parentForControl(), same as
+  e.g. aa_strength depends on advanced_aa. The native side now echoes
+  true_supersampling/supersampling_scale/supersampling_max_pixels under
+  those exact config-key names in the v40_runtime report (same convention
+  as every other feature) and appends the full dz_ss diagnostic block
+  (ss_state, ss_fallback_reason, ss_resolve_ok, ss_fn_*, etc.) so the
+  existing single runtime-report file the Monitor already reads carries
+  this feature's status too - no new file, no new root command needed.
+  buildStatusText() surfaces this as its own "Stage 3 - True Supersampling
+  status" block, and true_supersampling participates in pendingFeatures()
+  the same way every other toggle does.
+- v5.2.27: removed the "POCO M5 TUNING" section entirely (1 toggle + 5
+  sliders) and the "Low-Memory History (half resolution)" toggle. Both
+  were investigated first (traced to shader source) and ruled out as the
+  cause of a reported crop/zoom - removed per explicit request anyway, not
+  because they were found to be broken. Removed every reference in
+  parentForControl(), runtimeFeatureKeys, runtimeValueKeys, configOnlyKeys,
+  and pendingFeatures()'s key list; the addSectionHeader() page-routing
+  check for "POCO M5" was also dropped since that section no longer exists.
+  Version bumped 5.2.26 -> 5.2.27 (build.gradle + every "V5.2.26" status
+  label) alongside the matching native module.prop bump, so an updated
+  build is visibly distinguishable from the one that showed the bug.

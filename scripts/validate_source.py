@@ -78,12 +78,15 @@ for g in ['g_v5_aa','g_v5_aa_strength','g_v5_shadow','g_v5_shadow_stability','g_
         errors.append(f'{g}: uniform upload count invalid')
 
 # V6.0-V6.2 runtime report must expose all AI config and history telemetry.
+# Low-Memory History (the half-resolution option) was removed by design; the
+# history buffer is now always full-resolution, so ai_low_memory_history= is
+# no longer a token this report emits.
 ai_report_tokens = [
     'ai_reconstruction_v6=', 'ai_motion_strength=', 'ai_reactive_strength=',
     'ai_ghost_protection=', 'ai_subpixel_strength=', 'ai_frequency_detail=',
     'ai_edge_sharpen=', 'ai_luma_chroma=', 'ai_highlight_reconstruction=',
     'ai_shadow_recovery=', 'ai_material_reconstruction=', 'ai_dynamic_quality=',
-    'ai_detail_budget=', 'ai_motion_complexity=', 'ai_low_memory_history=',
+    'ai_detail_budget=', 'ai_motion_complexity=',
     'ai_history_width=', 'ai_history_height=', 'ai_history_pixels=',
     'ai_history_mode=', 'ai_pipeline_ready=',
 ]
@@ -91,7 +94,7 @@ for token in ai_report_tokens:
     if token not in src:
         errors.append(f'missing V6 AI runtime report token: {token}')
 
-# V5.2.26 diagnostic requirements.
+# V5.2.27 diagnostic requirements.
 diagnostic_tokens = [
     'g_v27_last_draw_fbo', 'g_v27_last_read_fbo',
     'g_v27_last_draw_color_type', 'g_v27_last_draw_color_name',
@@ -111,21 +114,21 @@ diagnostic_tokens = [
 ]
 for token in diagnostic_tokens:
     if token not in src:
-        errors.append(f'missing V5.2.26 diagnostic token: {token}')
+        errors.append(f'missing V5.2.27 diagnostic token: {token}')
 
 monitor_gradle = (root / 'monitor/app/build.gradle').read_text()
 monitor_java = (root / 'monitor/app/src/main/java/com/danzku/monitor/MainActivity.java').read_text()
 workflow_monitor = (root / 'monitor/.github/workflows/build-apk.yml').read_text()
 workflow_root = (root / '.github/workflows/build.yml').read_text()
 
-if 'versionName "5.2.26"' not in monitor_gradle or 'versionCode 526' not in monitor_gradle:
-    errors.append('monitor Gradle metadata is not 5.2.26/versionCode 526')
-if 'V5.2.26' not in monitor_java:
-    errors.append('MainActivity version label is not V5.2.26')
-if 'V5.2.26' not in workflow_root or 'V5.2.26' not in workflow_monitor:
-    errors.append('workflow version label is not V5.2.26')
-if 'DanzKu-Monitor-V5.2.26-debug' not in workflow_root or 'DanzKu-Monitor-V5.2.26-debug' not in workflow_monitor:
-    errors.append('workflow artifact name is not V5.2.26')
+if 'versionName "5.2.27"' not in monitor_gradle or 'versionCode 527' not in monitor_gradle:
+    errors.append('monitor Gradle metadata is not 5.2.27/versionCode 527')
+if 'V5.2.27' not in monitor_java:
+    errors.append('MainActivity version label is not V5.2.27')
+if 'V5.2.27' not in workflow_root or 'V5.2.27' not in workflow_monitor:
+    errors.append('workflow version label is not V5.2.27')
+if 'DanzKu-Monitor-V5.2.27-debug' not in workflow_root or 'DanzKu-Monitor-V5.2.27-debug' not in workflow_monitor:
+    errors.append('workflow artifact name is not V5.2.27')
 
 
 
@@ -156,8 +159,8 @@ for forbidden in ['sched_setaffinity', 'setpriority(', '/sys/class/devfreq', '/s
     if forbidden.lower() in src.lower():
         errors.append(f'forbidden performance/system implementation token present: {forbidden}')
 
-if 'version=5.2.26' not in prop or 'versionCode=526' not in prop:
-    errors.append('module.prop is not V5.2.26/versionCode 526')
+if 'version=5.2.27' not in prop or 'versionCode=527' not in prop:
+    errors.append('module.prop is not V5.2.27/versionCode 527')
 if 'android-29' not in workflow or 'arm64-v8a' not in workflow:
     errors.append('workflow target ABI/API mismatch')
 

@@ -456,12 +456,6 @@ static GLint g_v12_motion_softness_uniform = -1;
 static GLint g_v12_motion_threshold_uniform = -1;
 static GLint g_v12_history_response_uniform = -1;
 static GLint g_v12_motion_detail_preservation_uniform = -1;
-static GLint g_poco_m5_tuning_uniform = -1;
-static GLint g_poco_m5_quality_scale_uniform = -1;
-static GLint g_poco_m5_history_scale_uniform = -1;
-static GLint g_poco_m5_detail_budget_uniform = -1;
-static GLint g_poco_m5_temporal_response_uniform = -1;
-static GLint g_poco_m5_motion_cost_uniform = -1;
 
 static bool g_v12_motion_handling_value = true;
 static float g_v12_camera_motion_value = 0.65f;
@@ -474,12 +468,6 @@ static float g_v11_ghost_rejection_value = 0.72f;
 static float g_v11_detail_threshold_value = 0.018f;
 static float g_v11_detail_softness_value = 0.055f;
 static float g_v11_color_clip_value = 0.75f;
-static bool g_poco_m5_tuning_value = true;
-static float g_poco_m5_quality_scale_value = 0.82f;
-static float g_poco_m5_history_scale_value = 0.75f;
-static float g_poco_m5_detail_budget_value = 0.72f;
-static float g_poco_m5_temporal_response_value = 0.88f;
-static float g_poco_m5_motion_cost_value = 0.82f;
 static int g_v27_width = 0;
 static int g_v27_height = 0;
 static volatile EGLint g_v27_last_surface_width = 0;
@@ -506,7 +494,6 @@ static off_t g_v27_config_size = -1;
 static bool g_v27_control_present = false;
 static uint64_t g_v27_config_check_ns = 0;
 static bool g_v28_temporal_value = true;
-static bool g_ai_low_memory_history_value = true;
 static bool g_ai_reconstruction_v6_value = 1;
 static float g_ai_motion_strength_value = 0.55f;
 static float g_ai_reactive_strength_value = 0.35f;
@@ -692,7 +679,6 @@ static void parse_v27_config() {
             else if (key == "sharpen") g_v27_sharpen_value = strtof(val.c_str(), nullptr);
             else if (key == "clarity") g_v27_clarity_value = strtof(val.c_str(), nullptr);
             else if (key == "temporal") g_v28_temporal_value = (atoi(val.c_str()) != 0);
-            else if (key == "ai_low_memory_history") g_ai_low_memory_history_value = (atoi(val.c_str()) != 0);
             else if (key == "ai_reconstruction_v6") g_ai_reconstruction_v6_value = (atoi(val.c_str()) != 0);
             else if (key == "ai_motion_strength") g_ai_motion_strength_value = strtof(val.c_str(), nullptr);
             else if (key == "ai_reactive_strength") g_ai_reactive_strength_value = strtof(val.c_str(), nullptr);
@@ -782,14 +768,8 @@ static void parse_v27_config() {
             else if (key == "v12_motion_threshold") g_v12_motion_threshold_value = strtof(val.c_str(), nullptr);
             else if (key == "v12_history_response") g_v12_history_response_value = strtof(val.c_str(), nullptr);
             else if (key == "v12_motion_detail_preservation") g_v12_motion_detail_preservation_value = strtof(val.c_str(), nullptr);
-            else if (key == "poco_m5_tuning") g_poco_m5_tuning_value = (atoi(val.c_str()) != 0);
-            else if (key == "poco_m5_quality_scale") g_poco_m5_quality_scale_value = strtof(val.c_str(), nullptr);
-            else if (key == "poco_m5_history_scale") g_poco_m5_history_scale_value = strtof(val.c_str(), nullptr);
-            else if (key == "poco_m5_detail_budget") g_poco_m5_detail_budget_value = strtof(val.c_str(), nullptr);
-            else if (key == "poco_m5_temporal_response") g_poco_m5_temporal_response_value = strtof(val.c_str(), nullptr);
-            else if (key == "poco_m5_motion_cost") g_poco_m5_motion_cost_value = strtof(val.c_str(), nullptr);
             if (key == "enabled" || key == "logging" || key == "sharpen" || key == "clarity" ||
-                key == "temporal" || key == "ai_low_memory_history" || key == "ai_reconstruction_v6" ||
+                key == "temporal" || key == "ai_reconstruction_v6" ||
                 key == "ai_motion_strength" ||
                 key == "ai_reactive_strength" ||
                 key == "ai_ghost_protection" ||
@@ -809,9 +789,7 @@ static void parse_v27_config() {
                 key == "v11_ghost_rejection" || key == "v11_detail_threshold" || key == "v11_detail_softness" ||
                 key == "v11_color_clip" || key == "v12_motion_handling" || key == "v12_camera_motion" ||
                 key == "v12_motion_softness" || key == "v12_motion_threshold" || key == "v12_history_response" ||
-                key == "v12_motion_detail_preservation" || key == "poco_m5_tuning" ||
-                key == "poco_m5_quality_scale" || key == "poco_m5_history_scale" || key == "poco_m5_detail_budget" ||
-                key == "poco_m5_temporal_response" || key == "poco_m5_motion_cost" ||
+                key == "v12_motion_detail_preservation" ||
                 key == "temporal_strength" || key == "motion_aware" ||
                 key == "motion_threshold" || key == "motion_softness" || key == "material_detail" ||
                 key == "local_contrast" || key == "highlight_refine" || key == "shadow_refine" ||
@@ -1166,12 +1144,6 @@ static bool v27_init(int width, int height) {
         "uniform float u_v12_motion_threshold;"
         "uniform float u_v12_history_response;"
         "uniform float u_v12_motion_detail_preservation;"
-        "uniform float u_poco_m5_tuning;"
-        "uniform float u_poco_m5_quality_scale;"
-        "uniform float u_poco_m5_history_scale;"
-        "uniform float u_poco_m5_detail_budget;"
-        "uniform float u_poco_m5_temporal_response;"
-        "uniform float u_poco_m5_motion_cost;"
         "varying vec2 vUV;"
         "void main(){"
         " vec4 sampleC=texture2D(uTex,vUV);"
@@ -1192,14 +1164,10 @@ static bool v27_init(int width, int height) {
         " float edgeMask=smoothstep(uEdgeThreshold,uEdgeThreshold+uEdgeSoftness,edgeRaw)*uEdgeAware;"
         " float complexity=smoothstep(0.008,0.12,0.55*contrast+0.45*edgeRaw);"
         " float qualityScale=mix(1.0,mix(uQualityMin,uQualityMax,complexity),clamp(uDynamicQuality,0.0,1.0));"
-        " float deviceTuning=clamp(u_poco_m5_tuning,0.0,1.0);"
-        " float deviceScale=mix(1.0,clamp(u_poco_m5_quality_scale,0.55,1.0),deviceTuning);"
-        " float deviceDetailBudget=mix(1.0,clamp(u_poco_m5_detail_budget,0.45,1.0),deviceTuning);"
-        " qualityScale*=deviceScale;"
         " float localScale=1.0+uLocalContrast*edgeMask;"
         " float shadowMask=1.0-smoothstep(0.08,0.45,lumC);"
         " float highlightMask=smoothstep(0.55,0.92,lumC);"
-        " vec3 materialEnhanced=c+detail*(uClarity+uSharpen*adaptive+uMaterialDetail*edgeMask)*localScale*qualityScale*deviceDetailBudget;"
+        " vec3 materialEnhanced=c+detail*(uClarity+uSharpen*adaptive+uMaterialDetail*edgeMask)*localScale*qualityScale;"
         " float aiOn=clamp(u_ai_reconstruction_v6,0.0,1.0);"
         " float aiComplexity=smoothstep(0.004,0.16,edgeRaw+contrast)*clamp(u_ai_motion_complexity,0.0,1.0);"
         " float aiBudget=mix(1.0,clamp(u_ai_detail_budget,0.1,1.0),aiComplexity);"
@@ -1303,11 +1271,7 @@ static bool v27_init(int width, int height) {
         " vec3 clippedHistory=clamp(h,mix(vec3(0.0),hMin,u_v9_history_clip),mix(vec3(1.0),hMax,u_v9_history_clip));"
         " float reactiveGate=1.0-smoothstep(0.03,0.20,depthProxy*u_v9_depth_proxy);"
         " float reprojectionBlend=clamp(u_v9_reprojection*(0.65+0.35*reactiveGate)*(1.0-u_v9_responsive*depthProxy),0.0,1.0);"
-        " float deviceHistoryScale=mix(1.0,clamp(u_poco_m5_history_scale,0.50,1.0),deviceTuning);"
-        " float deviceTemporalResponse=mix(1.0,clamp(u_poco_m5_temporal_response,0.55,1.0),deviceTuning);"
-        " float deviceMotionCost=mix(1.0,clamp(u_poco_m5_motion_cost,0.55,1.0),deviceTuning);"
-        " vec3 temporalHistory=mix(h,clippedHistory,reprojectionBlend*deviceHistoryScale);"
-        " temporalHistory=mix(h,temporalHistory,deviceTemporalResponse);"
+        " vec3 temporalHistory=mix(h,clippedHistory,reprojectionBlend);"
         " float motionDelta=localMotion;"
         " float motionLevel=smoothstep(u_v12_motion_threshold,u_v12_motion_threshold+u_v12_motion_softness,motionDelta);"
         " float cameraMotionGate=smoothstep(0.008,0.12,abs(lumC-hLum)+edgeRaw*0.50)*clamp(u_v12_camera_motion,0.0,1.0);"
@@ -1316,7 +1280,6 @@ static bool v27_init(int width, int height) {
         " float motionDetailGate=mix(1.0,0.55,clamp(motionLevel*u_v12_motion_detail_preservation,0.0,1.0));"
         " float motionTemporalGate=mix(1.0,motionHistoryWeight,clamp(u_v12_motion_handling,0.0,1.0));"
         " motionTemporalGate*=mix(1.0,0.75,cameraMotionGate*motionLevel);"
-        " motionTemporalGate=mix(1.0,motionTemporalGate,deviceMotionCost);"
         " float v9Weight=clamp(u_v9_reconstruction*temporalWeight*v10TemporalGate,0.0,1.0);"
         " float motionV11Weight=clamp(v9Weight*motionTemporalGate,0.0,1.0);"
         " float detailSignal=length(detail);"
@@ -1491,12 +1454,6 @@ static bool v27_init(int width, int height) {
     g_v12_motion_threshold_uniform = glGetUniformLocation(g_v27_program, "u_v12_motion_threshold");
     g_v12_history_response_uniform = glGetUniformLocation(g_v27_program, "u_v12_history_response");
     g_v12_motion_detail_preservation_uniform = glGetUniformLocation(g_v27_program, "u_v12_motion_detail_preservation");
-    g_poco_m5_tuning_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_tuning");
-    g_poco_m5_quality_scale_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_quality_scale");
-    g_poco_m5_history_scale_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_history_scale");
-    g_poco_m5_detail_budget_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_detail_budget");
-    g_poco_m5_temporal_response_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_temporal_response");
-    g_poco_m5_motion_cost_uniform = glGetUniformLocation(g_v27_program, "u_poco_m5_motion_cost");
 
     glGenTextures(1, &g_v27_texture);
     glBindTexture(GL_TEXTURE_2D, g_v27_texture);
@@ -1743,8 +1700,7 @@ static void v27_write_runtime_report() {
     out += "ai_dynamic_quality=" + std::to_string(g_ai_dynamic_quality_value ? 1 : 0) + "\n";
     out += "ai_detail_budget=" + std::to_string(g_ai_detail_budget_value) + "\n";
     out += "ai_motion_complexity=" + std::to_string(g_ai_motion_complexity_value) + "\n";
-    out += "ai_low_memory_history=" + std::to_string(g_ai_low_memory_history_value ? 1 : 0) + "\n";
-    // V9-V12 + POCO M5 runtime state/value telemetry. These must mirror the
+    // V9-V12 runtime state/value telemetry. These must mirror the
     // config keys so the monitor can distinguish live runtime state from the
     // last saved config.
     out += "v9_reconstruction=" + std::to_string(g_v9_reconstruction_value ? 1 : 0) + "\n";
@@ -1768,16 +1724,10 @@ static void v27_write_runtime_report() {
     out += "v12_motion_threshold=" + std::to_string(g_v12_motion_threshold_value) + "\n";
     out += "v12_history_response=" + std::to_string(g_v12_history_response_value) + "\n";
     out += "v12_motion_detail_preservation=" + std::to_string(g_v12_motion_detail_preservation_value) + "\n";
-    out += "poco_m5_tuning=" + std::to_string(g_poco_m5_tuning_value ? 1 : 0) + "\n";
-    out += "poco_m5_quality_scale=" + std::to_string(g_poco_m5_quality_scale_value) + "\n";
-    out += "poco_m5_history_scale=" + std::to_string(g_poco_m5_history_scale_value) + "\n";
-    out += "poco_m5_detail_budget=" + std::to_string(g_poco_m5_detail_budget_value) + "\n";
-    out += "poco_m5_temporal_response=" + std::to_string(g_poco_m5_temporal_response_value) + "\n";
-    out += "poco_m5_motion_cost=" + std::to_string(g_poco_m5_motion_cost_value) + "\n";
     out += "ai_history_width=" + std::to_string(g_v28_history_width) + "\n";
     out += "ai_history_height=" + std::to_string(g_v28_history_height) + "\n";
     out += "ai_history_pixels=" + std::to_string((long long)g_v28_history_width * (long long)g_v28_history_height) + "\n";
-    out += "ai_history_mode=" + std::string(g_ai_low_memory_history_value ? "half_resolution" : "full_resolution") + "\n";
+    out += "ai_history_mode=full_resolution\n";
     out += "ai_pipeline_ready=" + std::to_string((g_v27_program && g_v28_history_texture && g_ai_reconstruction_v6_value) ? 1 : 0) + "\n";
     out += "history_valid=" + std::to_string(g_v28_history_valid ? 1 : 0) + "\n";
     pthread_mutex_lock(&g_fps_mutex);
@@ -1873,6 +1823,18 @@ static void v27_write_runtime_report() {
     out += "adaptive_texture_enhancement=" + std::to_string(g_v6_adaptive_texture_value) + "\n";
     out += "hdr_enhancement=" + std::to_string(g_v6_hdr_value) + "\n";
 
+    // Stage 3 True Supersampling: echo the config keys under their own names
+    // (same convention as every other feature above) so the Monitor APK's
+    // existing config-vs-runtime sync logic (pendingFeatures(), addToggle,
+    // addFloatControl) works for this feature without any special-casing,
+    // then append the full dz_ss diagnostic block (ss_state, ss_fn_*,
+    // ss_resolve_ok, etc.) so the same status panel that already shows every
+    // other feature's live state can show this one too.
+    out += "true_supersampling=" + std::to_string(g_ss_enabled_value ? 1 : 0) + "\n";
+    out += "supersampling_scale=" + std::to_string(g_ss_scale_value) + "\n";
+    out += "supersampling_max_pixels=" + std::to_string(g_ss_max_pixels_value) + "\n";
+    out += dz_ss::report_text();
+
     const std::string base = g_app_files_dir + "/danzku_v40_runtime_" + std::to_string((int)getpid());
     // Keep the existing .txt as the latest snapshot.
     write_file(base + ".txt", out);
@@ -1912,8 +1874,12 @@ static bool v27_ensure_history() {
     if (g_v27_width <= 0 || g_v27_height <= 0) return false;
 
     // V6.2 low-memory history stores half-resolution history when enabled.
-    const int history_width = g_ai_low_memory_history_value ? (g_v27_width + 1) / 2 : g_v27_width;
-    const int history_height = g_ai_low_memory_history_value ? (g_v27_height + 1) / 2 : g_v27_height;
+    // Low-Memory History (the option to halve this buffer's resolution) was
+    // removed - the history texture used by the temporal reconstruction
+    // pipeline (g_v28_temporal_value) is now always allocated at full
+    // resolution, matching the real render resolution 1:1.
+    const int history_width = g_v27_width;
+    const int history_height = g_v27_height;
     if (g_v28_history_texture && g_v28_history_fbo &&
         g_v28_history_width == history_width &&
         g_v28_history_height == history_height) {
@@ -2311,12 +2277,6 @@ static bool v27_process_frame(EGLSurface surface) {
     glUniform1f(g_v12_motion_threshold_uniform, visual_proof_bypass ? 0.0f : (g_v12_motion_threshold_value));
     glUniform1f(g_v12_history_response_uniform, visual_proof_bypass ? 0.0f : (g_v12_history_response_value));
     glUniform1f(g_v12_motion_detail_preservation_uniform, visual_proof_bypass ? 0.0f : (g_v12_motion_detail_preservation_value));
-    glUniform1f(g_poco_m5_tuning_uniform, visual_proof_bypass ? 0.0f : (g_poco_m5_tuning_value ? 1.0f : 0.0f));
-    glUniform1f(g_poco_m5_quality_scale_uniform, visual_proof_bypass ? 0.0f : (g_poco_m5_quality_scale_value));
-    glUniform1f(g_poco_m5_history_scale_uniform, visual_proof_bypass ? 0.0f : (g_poco_m5_history_scale_value));
-    glUniform1f(g_poco_m5_detail_budget_uniform, visual_proof_bypass ? 0.0f : (g_poco_m5_detail_budget_value));
-    glUniform1f(g_poco_m5_temporal_response_uniform, visual_proof_bypass ? 0.0f : (g_poco_m5_temporal_response_value));
-    glUniform1f(g_poco_m5_motion_cost_uniform, visual_proof_bypass ? 0.0f : (g_poco_m5_motion_cost_value));
     glBindBuffer(GL_ARRAY_BUFFER, g_v27_vbo);
     glEnableVertexAttribArray((GLuint)g_v27_pos);
     glEnableVertexAttribArray((GLuint)g_v27_uv);

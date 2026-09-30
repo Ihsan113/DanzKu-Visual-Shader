@@ -1025,7 +1025,24 @@ void try_engage(EGLDisplay dpy, EGLSurface surface) {
     S.sx = static_cast<float>(tw) / static_cast<float>(sw);
     S.sy = static_cast<float>(th) / static_cast<float>(sh);
     S.scale_eff = scale;
-    gl.GetIntegerv(GL_VIEWPORT, S.app_vp);
+    // Zoom bug fix (found from a persistent-zoom report on a UI screen that
+    // apparently does not re-issue glViewport every frame, e.g. a static
+    // hero/skin preview pane): seeding S.app_vp from whatever the driver's
+    // GL_VIEWPORT happens to report AT THE EXACT MOMENT try_engage() fires
+    // is unreliable — if that screen's viewport is not the full surface (a
+    // sub-region pane, or a stale value left over from an earlier partial
+    // pass) and the game does not call glViewport again before its next
+    // draws, that wrong region gets treated as "the whole frame", scaled up,
+    // and everything drawn relative to it ends up magnified relative to the
+    // supersampled target — a persistent zoom for as long as that screen is
+    // shown. The EGL surface size (sw,sh) queried above is always the
+    // correct "default framebuffer, full frame" baseline regardless of
+    // whatever partial viewport happened to be active at this instant, and
+    // it is what create_resources()'s target size is already based on, so
+    // seed from that instead of a driver read-back. Any subsequent explicit
+    // glViewport call from the game (the common case, every frame) still
+    // overrides this via w_Viewport() as before.
+    S.app_vp[0] = 0; S.app_vp[1] = 0; S.app_vp[2] = sw; S.app_vp[3] = sh;
     gl.GetIntegerv(GL_SCISSOR_BOX, S.app_sc);
     S.app_sc_en = gl.IsEnabled(GL_SCISSOR_TEST) != 0;
     S.app_draw = 0; S.app_read = 0;

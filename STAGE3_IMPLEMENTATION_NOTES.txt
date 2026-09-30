@@ -171,6 +171,60 @@ pass-through). A context loss or a surface resize is treated as a benign
 disengage-and-re-engage rather than counting toward that limit.
 
 ====================================================================
+0.2 THIRD ROOT CAUSE: PERSISTENT ZOOM (found after the 0.1 timing fix,
+    fixed in v5.2.27, POCO M5 Tuning / Low-Memory History ruled out)
+====================================================================
+With the 0.1 timing fix confirmed working on-device (wrapper_calls > 0,
+ss_bypass_frames=0 for hundreds of successful frames), a second report came
+in: not a crop this time, but a persistent ZOOM on a UI screen (a hero/skin
+preview) while the supersampling scale was above 1x. The person suspected
+POCO M5 Tuning and Low-Memory History.
+
+Investigated first, before touching anything: traced both features down to
+their actual GLSL usage. POCO M5 Tuning's five values (quality_scale,
+history_scale, detail_budget, temporal_response, motion_cost) were only ever
+`mix()` blend factors applied to color output - never used in any UV,
+texture-coordinate, viewport, or framebuffer calculation. Low-Memory
+History only controlled the allocated size of the temporal-reconstruction
+history texture via its own glCopyTexSubImage2D call, entirely separate
+from the main render target. Neither has any mechanism by which it could
+produce a geometric zoom or crop. Both were removed anyway per explicit
+request (see CHANGELOG.md), but that did not and could not fix this bug.
+
+The actual bug: dz_ss::try_engage() seeded `S.app_vp` - the engine's
+internal belief about "the game's whole-frame viewport" - by reading back
+whatever `GL_VIEWPORT` the driver happened to report at the exact instant
+supersampling engaged (`gl.GetIntegerv(GL_VIEWPORT, S.app_vp)`). On most
+screens this is harmless: the game sets its viewport near the start of
+every frame regardless, so any wrong seed gets corrected via w_Viewport()
+within a frame or two - imperceptible. But a screen that does NOT re-issue
+glViewport every frame (a static 3D preview pane is a plausible example,
+though this was not independently confirmed on-device) keeps whatever
+viewport was active when it was set up. If engage happened to land while
+such a screen was already showing, and its viewport was smaller than the
+full surface, that smaller region got treated as "the whole frame" and
+scaled up by the supersampling factor - every subsequent draw (still using
+that wrong, scaled baseline, since nothing ever corrected it) rendered
+larger than intended relative to the actual output, i.e. a persistent zoom,
+for as long as that screen stayed up.
+
+Fix: seed `S.app_vp` from the EGL surface size (`sw, sh`, already used to
+size the FBO and known correct regardless of whatever viewport happened to
+be active) instead of a driver read-back. Scissor seeding was left as a
+driver read-back, since GL_SCISSOR_TEST being legitimately enabled with a
+real sub-region at engage time is a plausible, valid state to inherit,
+unlike viewport (which is expected to describe the whole target unless a
+sub-pass is deliberately in progress). New host test
+`tests/ss_host_test.cpp` scenario [12] simulates a small, non-full-surface
+viewport being active at the exact moment engage fires, and confirms both
+the post-engage driver viewport and a subsequent draw with no further
+glViewport call land at the full supersampled render size rather than a
+scaled-up small region. This is NOT yet re-confirmed on the actual
+hero-preview screen on-device (see section 4) - the host test proves the
+engine's logic no longer has this failure mode, not that this was the only
+mechanism behind the reported zoom.
+
+====================================================================
 2. WHAT IS *NOT* CLAIMED
 ====================================================================
 * Compatibility with any game other than Mobile Legends (com.mobile.legends)
@@ -226,7 +280,7 @@ disengage-and-re-engage rather than counting toward that limit.
 ====================================================================
 4. TESTED vs NOT YET PROVEN
 ====================================================================
-Tested (host, mocked GPU, unchanged by the 2026-09-29 fix):
+Tested (host, mocked GPU):
   - FBO redirect mapping for bind/viewport/scissor/blit/invalidate/
     drawbuffers/readbuffer/getintegerv, including an offscreen-RT round trip.
   - Resolve pass renders fullscreen into real FB0 at surface size while
@@ -245,51 +299,66 @@ Tested (host, mocked GPU, unchanged by the 2026-09-29 fix):
   - Surface resize triggers a clean disengage + re-engage at the new size.
   - The "wrappers bypassed" guard skips a resolve instead of corrupting the
     frame when the driver's real FB0 is unexpectedly bound at swap time.
-  These are all still valid: the 2026-09-29 fix is purely about WHEN
-  dz_ss::set_options() gets called from danzku_shader.cpp, not about the
-  dz_ss engine's own logic, so the host test suite (tests/ss_host_test.cpp,
-  which drives dz_ss directly) needed no changes and still passes 42/42.
+  - (v5.2.27) The engage-time viewport baseline is seeded from the EGL
+    surface size, not a driver read-back - scenario [12] simulates a small,
+    non-full-surface viewport being active at the exact engage instant and
+    confirms both the post-engage viewport and a following draw with no
+    glViewport call land at the full supersampled size.
+  tests/ss_host_test.cpp: 45/45 assertions pass.
 
-Tested on-device, first run (POCO M5, com.mobile.legends, 2026-09-29,
-BEFORE this fix - see danzku_ss_12146.txt in files.zip/
-puscepataokshader.zip):
-  - Hooks install successfully (eglGetProcAddress/dlsym both
-    got_patch_ok).
-  - The engine DOES engage (ss_engage_success=7, ss_fbo_gl_error=0x0000)
-    and DOES resolve frames (ss_resolve_ok=1116, ss_resolve_fail=0) when it
-    is engaged - the FBO creation, resolve shader, and state save/restore
-    all work against the real Mali-G57 driver.
-  - Confirmed the section 0.1 bug: every ss_fn_* wrapper shows dlsym_req=1,
-    wrapper_calls=0. dz_ss_calls totals (dlsym_gl_calls=210) confirm Unity
-    does resolve its GL functions through dlsym in general - just not
-    through our wrapper for these specific symbols, because it resolved
-    them before dz_ss::set_options() had ever been called.
-  - Confirmed the resulting sticky FAILED after 3 bypass events.
+Tested on-device, run 1 (POCO M5, com.mobile.legends, 2026-09-29, BEFORE
+the 0.1 timing fix - danzku_ss_12146.txt in files.zip/
+puscepataokshader-1.zip):
+  - Hooks install successfully (eglGetProcAddress/dlsym both got_patch_ok).
+  - The engine DOES engage (ss_engage_success=7) and DOES resolve frames
+    (ss_resolve_ok=1116, ss_resolve_fail=0) when engaged - FBO creation,
+    resolve shader, and state save/restore all work against the real
+    Mali-G57 driver.
+  - Confirmed the section 0.1 bug directly: every ss_fn_* wrapper showed
+    dlsym_req=1, wrapper_calls=0 - Unity resolved these specific pointers
+    before dz_ss::set_options() had ever been called, so it got the real,
+    unwrapped functions. Confirmed the resulting sticky FAILED after 3
+    bypass events.
 
-NOT yet proven (needs a fresh on-device run WITH this fix applied):
-  - That moving sync_ss_options() into postAppSpecialize() actually makes
-    Unity's dlsym/eglGetProcAddress calls for these symbols land on our
-    wrapper this time (ss_fn_BindFramebuffer wrapper_calls should be >0,
-    and ss_redirect_binds/ss_redirect_viewports should be >0 - re-pull
-    danzku_ss_<pid>.txt after a fresh play session and check those fields
-    first, before anything else).
-  - Whether ss_state stays ACTIVE for the whole session once that is fixed,
-    or whether some other GLES entry point this patch does not wrap also
-    needs covering (watch ss_bypass_frames and ss_fallback_reason).
-  - Whether the hero-preview/skin-showcase screen crop/zoom is actually
-    resolved by this fix, or is a separate issue - re-check that screen
-    specifically once wrapper_calls are confirmed >0.
-  - That the Mali-G57 driver accepts an RGBA8 + DEPTH24_STENCIL8 (or
-    whatever combination the real context reports) render target at
-    ~2378x1066 without excessive memory pressure or stalls over a full
-    match (the first run only reached ss_frames_active=13 before failing).
-  - Real-device frame timing/stability over an extended play session, once
-    the engine can actually stay engaged.
-  - Whether the pointer-table scan finds and patches anything in practice
-    (ss_table_slots_patched_total was 0 on the first run, consistent with
-    the wrapper interception being the thing that was broken - the table
-    scan itself was never exercised meaningfully because the game never
-    called through it after the fact).
+Tested on-device, run 2 (same device/game, 2026-09-29, AFTER the 0.1 timing
+fix, BEFORE the 0.2 zoom fix - danzku_ss_17057.txt in
+puscepataokshader-2.zip):
+  - Confirms the 0.1 fix worked: ss_fn_BindFramebuffer/Viewport/
+    DrawElements/etc. now show real wrapper_calls counts in the thousands,
+    ss_bypass_frames=0, ss_resolve_ok=806 with ss_resolve_fail=0 and
+    ss_apply_state_errors=0 across ss_frames_active=493 - the redirect
+    genuinely intercepted the game's own GLES calls this time, not just
+    the engine's own direct driver calls.
+  - Session still ended ss_state=FAILED, but for an unrelated, explainable
+    reason: supersampling_scale was changed live mid-session via the
+    Monitor APK (ss_fallback_reason=options_changed, ss_fallback_count=0 -
+    a benign disengage, not a real failure), and the following re-engage
+    attempt computed an effective scale that landed just under the 1.05
+    floor for that particular EGL surface size at that moment
+    (ss_fail_reason=scale_below_1.05_after_clamp). Not itself evidence of a
+    bug in the redirect logic.
+  - This is the run where the persistent-zoom report (section 0.2) came in.
+    POCO M5 Tuning and Low-Memory History were investigated and ruled out
+    from this run's evidence plus a full shader-source trace (section 0.2).
+
+NOT yet proven (needs a fresh on-device run WITH the v5.2.27 zoom fix):
+  - Whether the zoom is actually gone on the screen it was reported on. The
+    host test (scenario [12]) proves the engine no longer HAS this failure
+    mode in the abstract; it does not confirm that screen's specific
+    viewport behavior matched the hypothesis, or that fixing it was
+    sufficient. Re-check that exact screen with supersampling_scale > 1.0.
+  - Whether ss_state can stay ACTIVE for a full, longer session without a
+    live mid-session scale change forcing a re-engage (run 2's FAILED was
+    self-inflicted via the Monitor APK, not a redirect bug) - a longer,
+    untouched-config session would better test steady-state stability.
+  - That the Mali-G57 driver accepts the chosen RGBA8 + depth/stencil
+    render target size without excessive memory pressure or stalls over a
+    full match (longest run so far: ss_frames_active=493, run 2).
+  - Whether the pointer-table scan (dz_ss::patch_tables) finds and patches
+    anything in practice now that the primary eglGetProcAddress/dlsym path
+    works - ss_table_slots_patched_total was 0 in both on-device runs so
+    far, consistent with the primary interception being sufficient on its
+    own; the table scan remains untested as a fallback mechanism.
 
 ====================================================================
 5. BUILD, INSTALL, AND WHAT TO PULL OFF THE DEVICE
@@ -297,4 +366,16 @@ NOT yet proven (needs a fresh on-device run WITH this fix applied):
 See BUILD_AND_TEST.md in the repo root for the exact commands (NDK build,
 Magisk zip layout, adb/Termux install, and the `run-as`/su commands to pull
 danzku_ss_<pid>.txt and read every field this patch adds to the report).
+
+====================================================================
+6. MONITOR APK
+====================================================================
+monitor/app now has a toggle + two sliders for this feature (scale, max
+pixels) on the runtime page, and the v40_runtime report the Monitor already
+reads carries true_supersampling/supersampling_scale/
+supersampling_max_pixels plus the full dz_ss diagnostic block (ss_state,
+ss_fallback_reason, ss_resolve_ok, etc.) under a "Stage 3 - True
+Supersampling status" section. See CHANGELOG.md and
+monitor/app/src/main/java/APK_UI_RUNTIME_FIX_NOTES.txt for what changed
+there specifically.
 

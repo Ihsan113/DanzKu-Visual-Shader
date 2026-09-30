@@ -178,7 +178,9 @@ public class MainActivity extends Activity {
         defaultStrengths.put("fps_boost", "1");
         defaultStrengths.put("ai_reconstruction_v6", "1");
         defaultStrengths.put("ai_dynamic_quality", "1");
-        defaultStrengths.put("ai_low_memory_history", "1");
+        defaultStrengths.put("true_supersampling", "1");
+        defaultStrengths.put("supersampling_scale", "1.25");
+        defaultStrengths.put("supersampling_max_pixels", "4200000");
     }
 
     int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
@@ -434,6 +436,11 @@ public class MainActivity extends Activity {
         addToggle("FPS Boost", "fps_boost");
         addToggle("Frame Buffer Optimization", "frame_buffer_optimization");
 
+        addSectionHeader("STAGE 3 — TRUE SUPERSAMPLING");
+        addToggle("True Supersampling", "true_supersampling");
+        addFloatControl("Supersampling Scale", "supersampling_scale", 1.0f, 2.0f, 1.25f, "", "", "%.2fx");
+        addFloatControl("Supersampling Max Pixels", "supersampling_max_pixels", 1000000f, 8000000f, 4200000f, "", "", "%.0f px");
+
         addSectionHeader("ANTI-ALIASING & EDGE QUALITY");
         addToggle("Advanced AA", "advanced_aa");
         addFloatControl("AA Strength", "aa_strength", 0f, 1f, 0.22f, "", "", "%.2f");
@@ -496,14 +503,6 @@ public class MainActivity extends Activity {
         addFloatControl("History Response", "v12_history_response", 0f, 1f, 0.75f, "", "", "%.2f");
         addFloatControl("Motion Detail Preservation", "v12_motion_detail_preservation", 0f, 1f, 0.80f, "", "", "%.2f");
 
-        addSectionHeader("POCO M5 TUNING");
-        addToggle("POCO M5 Tuning", "poco_m5_tuning");
-        addFloatControl("Quality Scale", "poco_m5_quality_scale", 0.55f, 1f, 0.82f, "", "", "%.2f");
-        addFloatControl("History Scale", "poco_m5_history_scale", 0.50f, 1f, 0.75f, "", "", "%.2f");
-        addFloatControl("Detail Budget", "poco_m5_detail_budget", 0.45f, 1f, 0.72f, "", "", "%.2f");
-        addFloatControl("Temporal Response", "poco_m5_temporal_response", 0.55f, 1f, 0.88f, "", "", "%.2f");
-        addFloatControl("Motion Cost", "poco_m5_motion_cost", 0.55f, 1f, 0.82f, "", "", "%.2f");
-
         addSectionHeader("COLOR & TEXTURE");
         addToggle("Color Master", "color_master");
         addToggle("Texture Master", "texture_master");
@@ -531,7 +530,6 @@ public class MainActivity extends Activity {
         addToggle("AI Dynamic Quality", "ai_dynamic_quality");
         addFloatControl("AI Detail Budget", "ai_detail_budget", 0f, 1f, 0.80f, "", "", "%.2f");
         addFloatControl("Motion Complexity Scaling", "ai_motion_complexity", 0f, 1f, 0.55f, "", "", "%.2f");
-        addToggle("Low-Memory History (half resolution)", "ai_low_memory_history");
 
         currentPage = "settings";
         Button tuning = new Button(this);
@@ -967,7 +965,7 @@ public class MainActivity extends Activity {
 
         addRootView(box);
     }    void addSectionHeader(String text) {
-        if (text.startsWith("ANTI-ALIASING") || text.startsWith("SHADOWS") || text.startsWith("COLOR & TEXTURE") || text.startsWith("POCO M5")) currentPage = "visual";
+        if (text.startsWith("ANTI-ALIASING") || text.startsWith("SHADOWS") || text.startsWith("COLOR & TEXTURE")) currentPage = "visual";
         else if (text.startsWith("TEMPORAL") || text.startsWith("V9") || text.startsWith("V10") || text.startsWith("V11") || text.startsWith("V12") || text.startsWith("AI++")) currentPage = "reconstruction";
         else if (text.startsWith("PERFORMANCE")) currentPage = "runtime";
         LinearLayout wrap = new LinearLayout(this);
@@ -1084,14 +1082,12 @@ public class MainActivity extends Activity {
                 || "v12_motion_threshold".equals(key) || "v12_history_response".equals(key)
                 || "v12_motion_detail_preservation".equals(key)) return "v12_motion_handling";
 
-        // POCO M5 tuning sliders.
-        if ("poco_m5_quality_scale".equals(key) || "poco_m5_history_scale".equals(key)
-                || "poco_m5_detail_budget".equals(key) || "poco_m5_temporal_response".equals(key)
-                || "poco_m5_motion_cost".equals(key)) return "poco_m5_tuning";
-
         // Global color/texture controls.
         if ("vibrance".equals(key) || "saturation".equals(key) || "hdr_enhancement".equals(key)) return "color_master";
         if ("anisotropic_enhancement".equals(key) || "adaptive_texture_enhancement".equals(key)) return "texture_master";
+
+        // Stage 3 True Supersampling.
+        if ("supersampling_scale".equals(key) || "supersampling_max_pixels".equals(key)) return "true_supersampling";
         return null;
     }
 
@@ -1560,7 +1556,7 @@ public class MainActivity extends Activity {
 
     String buildStatusText() {
         String rootCheck = su("id");
-        if (!rootCheck.startsWith("uid=0")) return "DANZKU MONITOR V5.2.26\nROOT: FAILED\n" + rootCheck;
+        if (!rootCheck.startsWith("uid=0")) return "DANZKU MONITOR V5.2.27\nROOT: FAILED\n" + rootCheck;
         RuntimeState st = readRuntime();
         String config = configText();
         HashSet<String> targets = readTargetPackages();
@@ -1583,7 +1579,7 @@ public class MainActivity extends Activity {
         }
 
         if (!st.ready) {
-            final String text = "DANZKU MONITOR V5.2.26\n" +
+            final String text = "DANZKU MONITOR V5.2.27\n" +
                     "ROOT: OK\n" +
                     "TARGET: " + targetSummary + "\n" +
                     "ACTIVE APP: " + activeSummary + "\n" +
@@ -1598,7 +1594,7 @@ public class MainActivity extends Activity {
             return text;
         }
 
-        StringBuilder sb = new StringBuilder("DANZKU MONITOR V5.2.26\n");
+        StringBuilder sb = new StringBuilder("DANZKU MONITOR V5.2.27\n");
         sb.append("ROOT: OK\n");
         sb.append("TARGET: ").append(targetSummary).append("\n");
         sb.append("ACTIVE APP: ").append(activeSummary).append("\n");
@@ -1628,14 +1624,15 @@ public class MainActivity extends Activity {
         sb.append("\nRuntime feature status:\n");
         String[] runtimeFeatureKeys = {
                 "enabled","ram_optimization","fps_boost","frame_buffer_optimization",
+                "true_supersampling",
                 "advanced_aa","edge_aware","shadow_enhancement","contact_shadow","ao_enhancement",
                 "specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement",
                 "temporal","temporal_detail_recovery","reconstruction_confidence",
                 "neural_style_reconstruction","high_end_reconstruction",
                 "visual_proof","visual_proof_bypass","logging",
-                "ai_reconstruction_v6","ai_dynamic_quality","ai_low_memory_history",
+                "ai_reconstruction_v6","ai_dynamic_quality",
                 "v9_reconstruction","v10_antishimmer","v11_detail_preservation",
-                "v12_motion_handling","poco_m5_tuning"
+                "v12_motion_handling"
         };
         for (String key : runtimeFeatureKeys) {
             String v = value(st.report, key);
@@ -1660,9 +1657,28 @@ public class MainActivity extends Activity {
             if (v != null) sb.append(key).append(": ").append(v).append("\n");
         }
 
+        sb.append("\nStage 3 - True Supersampling status:\n");
+        String[] ssStateKeys = {
+                "ss_state","ss_fail_reason","ss_fallback_reason","ss_fallback_count",
+                "ss_engage_attempts","ss_engage_success","ss_bypass_frames",
+                "ss_hook_notes",
+                "ss_requested_scale","ss_effective_scale","ss_scale_clamped",
+                "ss_render_resolution","ss_output_resolution",
+                "ss_fbo_created","ss_fbo_status",
+                "ss_redirect_binds","ss_redirect_viewports","ss_redirect_scissors",
+                "ss_draws_into_supersampled_fbo","ss_draws_into_other_fbos",
+                "ss_resolve_mode","ss_resolve_ok","ss_resolve_fail","ss_resolve_gl_error",
+                "ss_table_slots_patched_total"
+        };
+        for (String key : ssStateKeys) {
+            String v = value(st.report, key);
+            if (v != null) sb.append(key).append(": ").append(v).append("\n");
+        }
+
         sb.append("\nRuntime applied visual values:\n");
         String[] runtimeValueKeys = {
                 "sharpen","clarity","temporal_strength","motion_threshold","motion_softness",
+                "supersampling_scale","supersampling_max_pixels",
                 "material_detail","local_contrast","highlight_refine","shadow_refine",
                 "edge_strength","edge_threshold","edge_softness","reconstruction",
                 "recovery_strength","recovery_threshold","confidence_strength","confidence_threshold",
@@ -1677,9 +1693,7 @@ public class MainActivity extends Activity {
                 "v10_shimmer_strength","v10_stability_threshold","v10_stability_softness","v10_edge_protection",
                 "v11_ghost_rejection","v11_detail_threshold","v11_detail_softness","v11_color_clip",
                 "v12_camera_motion","v12_motion_softness","v12_motion_threshold","v12_history_response",
-                "v12_motion_detail_preservation",
-                "poco_m5_quality_scale","poco_m5_history_scale","poco_m5_detail_budget",
-                "poco_m5_temporal_response","poco_m5_motion_cost"
+                "v12_motion_detail_preservation"
         };
         for (String key : runtimeValueKeys) {
             String v = value(st.report, key);
@@ -1692,9 +1706,7 @@ public class MainActivity extends Activity {
                 "v10_antishimmer","v10_shimmer_strength","v10_stability_threshold","v10_stability_softness","v10_edge_protection",
                 "v11_detail_preservation","v11_ghost_rejection","v11_detail_threshold","v11_detail_softness","v11_color_clip",
                 "v12_motion_handling","v12_camera_motion","v12_motion_softness","v12_motion_threshold",
-                "v12_history_response","v12_motion_detail_preservation",
-                "poco_m5_tuning","poco_m5_quality_scale","poco_m5_history_scale","poco_m5_detail_budget",
-                "poco_m5_temporal_response","poco_m5_motion_cost"
+                "v12_history_response","v12_motion_detail_preservation"
         };
         for (String key : configOnlyKeys) {
             String cv = configValueFromText(config, key);
@@ -1717,7 +1729,7 @@ public class MainActivity extends Activity {
 
     String pendingFeatures(String report, String config) {
         StringBuilder out=new StringBuilder();
-        String[] keys={"enabled","advanced_aa","shadow_enhancement","contact_shadow","ao_enhancement","specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement","visual_proof","visual_proof_bypass","logging","temporal","temporal_detail_recovery","reconstruction_confidence","neural_style_reconstruction","high_end_reconstruction","ai_reconstruction_v6","ai_dynamic_quality","ai_low_memory_history","v9_reconstruction","v10_antishimmer","v11_detail_preservation","v12_motion_handling","poco_m5_tuning"};
+        String[] keys={"enabled","ram_optimization","fps_boost","frame_buffer_optimization","true_supersampling","advanced_aa","shadow_enhancement","contact_shadow","ao_enhancement","specular_enhancement","reflection_approximation","lighting_enhancement","effect_enhancement","visual_proof","visual_proof_bypass","logging","temporal","temporal_detail_recovery","reconstruction_confidence","neural_style_reconstruction","high_end_reconstruction","ai_reconstruction_v6","ai_dynamic_quality","v9_reconstruction","v10_antishimmer","v11_detail_preservation","v12_motion_handling"};
         for(String key:keys){
             String c=configValueFromText(config,key), r=value(report,key);
             if(c!=null && r!=null && isFeatureOn(c)!=isFeatureOn(r)){
@@ -1866,7 +1878,7 @@ public class MainActivity extends Activity {
         if(!overlayDetailMode){
             b.append("FPS ").append(fmt(render.fps));
         } else {
-            b.append("DANZKU V5.2.26\n");
+            b.append("DANZKU V5.2.27\n");
             if (lastRuntimePackage != null && lastRuntimePackage.length() > 0) {
                 b.append("APP ").append(appLabel(lastRuntimePackage)).append(" (").append(lastRuntimePackage).append(")\n");
             }
@@ -1899,7 +1911,7 @@ public class MainActivity extends Activity {
                     lastRuntimePackage="";
                     runOnUiThread(() -> {
                         if(overlayVisible && overlayText != null) {
-                            overlayText.setText("DANZKU V5.2.26\nFPS --");
+                            overlayText.setText("DANZKU V5.2.27\nFPS --");
                         }
                     });
                     return;

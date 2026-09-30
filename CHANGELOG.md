@@ -1,3 +1,78 @@
+# V5.2.27 — zoom-bug fix, POCO M5 Tuning / Low-Memory History removed
+
+- **Zoom bug fix (danzku_ss.cpp, try_engage()).** Root-caused from a report
+  of a persistent zoom (not crop) on a UI screen, after the earlier
+  eglGetProcAddress/dlsym timing fix was already confirmed working
+  on-device: `try_engage()` used to seed `S.app_vp` (the engine's
+  "this is the game's whole frame" baseline) from
+  `glGetIntegerv(GL_VIEWPORT, ...)` — i.e. whatever the driver happened to
+  report at the exact instant supersampling engaged. On a screen that does
+  not re-issue glViewport every frame (a static preview pane, for example),
+  if that instant's viewport was not the full surface, the wrong region got
+  treated as "the whole frame" and scaled up — everything rendered relative
+  to it came out magnified for as long as that screen was shown. Fixed by
+  seeding `S.app_vp` from the known-correct EGL surface size (already used
+  to size the FBO) instead of a driver read-back at that instant; any
+  explicit glViewport call from the game still overrides it as before. New
+  host regression test `tests/ss_host_test.cpp` scenario [12] simulates
+  exactly this (a small, non-full-surface viewport active at engage time)
+  and confirms both the post-engage viewport and a subsequent draw with no
+  glViewport call land at the full supersampled size. 45/45 host tests pass.
+- **POCO M5 Tuning removed** (native + Monitor APK) — investigated first at
+  the user's request: traced every use of its 5 tunable values down to the
+  GLSL shader source and confirmed they were only ever blend/mix factors on
+  color output (sharpen/detail/temporal-history/motion-cost strength), never
+  touching viewport, framebuffer, or UV/texture-coordinate math — i.e. not a
+  possible cause of the reported crop/zoom. Removed anyway per explicit
+  request: 6 uniforms, the `deviceTuning`/`deviceScale`/`deviceDetailBudget`/
+  `deviceHistoryScale`/`deviceTemporalResponse`/`deviceMotionCost` shader
+  variables and their now-dead `mix()` wrapping (simplified back to the
+  un-tuned base expressions), the config keys and their `visual.conf`
+  section, and the Monitor APK's "POCO M5 TUNING" section (1 toggle + 5
+  sliders) plus every status-array/pendingFeatures() reference to it.
+- **Low-Memory History's half-resolution option removed** (native + Monitor
+  APK) — same investigation: it only ever resized the temporal-reconstruction
+  history texture via its own `glCopyTexSubImage2D` call, never touching the
+  main viewport/framebuffer; also not a possible cause of the crop/zoom. The
+  history *system* itself (`g_v28_*`, used by the broader temporal
+  reconstruction feature) is unchanged and still present - only the toggle
+  that let it run at half resolution is gone; the history buffer is now
+  always allocated at full resolution. Removed the Monitor APK toggle and
+  its status-array references; `ai_history_mode=` in the runtime report is
+  now the constant `full_resolution` instead of a config-driven value.
+- `scripts/validate_source.py` updated to match: dropped the now-removed
+  `ai_low_memory_history=` token from the required V6 AI runtime report
+  list; version checks below.
+- **Version bump 5.2.26 → 5.2.27** (module.prop x2, monitor/app/build.gradle,
+  every "V5.2.26" label in MainActivity.java, both GitHub Actions workflow
+  files, and every corresponding hardcoded check in validate_source.py) so
+  a rebuilt module + APK is visibly distinguishable from the pre-fix build
+  the crop/zoom and stale-wrapper reports came from — requested directly in
+  response to "info status di apk gak sinkron".
+
+# Monitor APK — sync Stage 3 True Supersampling status and controls
+
+- The Monitor APK (monitor/app) previously had no controls or status for
+  Stage 3 at all — true_supersampling/supersampling_scale/
+  supersampling_max_pixels were config-file-only keys with no UI.
+- Added a "STAGE 3 — TRUE SUPERSAMPLING" section on the runtime page: a
+  toggle and two sliders (scale 1.00–2.00x, max pixels 1,000,000–8,000,000),
+  built with the exact same addSectionHeader/addToggle/addFloatControl
+  helpers every other feature uses, with the sliders wired into
+  parentForControl() so they grey out when the toggle is off - identical
+  pattern to how aa_strength depends on advanced_aa.
+- Native side (v27_write_runtime_report(), danzku_shader.cpp): now echoes
+  the three config keys under their own names into the same v40_runtime
+  report the Monitor already reads, and appends the full dz_ss::report_text()
+  diagnostic block after them - so the Monitor's existing single-file,
+  single-root-shell-call status pipeline picks this feature up with no new
+  file, no new command, no special-casing.
+- buildStatusText() gained a "Stage 3 - True Supersampling status" block
+  (ss_state, ss_fallback_reason, ss_resolve_ok/fail, ss_render_resolution,
+  ss_redirect_binds/viewports, etc.), and true_supersampling was added to
+  runtimeFeatureKeys/pendingFeatures() so it participates in the same
+  config-vs-runtime sync detection as every other toggle.
+
 # Stage 3 fix — supersampling engine enabled too late (found from on-device test)
 
 - Root-caused from the first real on-device run (POCO M5, com.mobile.legends):

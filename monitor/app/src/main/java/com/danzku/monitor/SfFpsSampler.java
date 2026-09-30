@@ -36,7 +36,7 @@ final class SfFpsSampler {
     }
 
     private static final long PENDING = Long.MAX_VALUE;
-    private static final long WINDOW_NS = 1_000_000_000L;
+    private static final long WINDOW_NS = 600_000_000L;
     private static final long STALE_MS = 1500L;
 
     private static final long FRESH_NS = 1_200_000_000L;

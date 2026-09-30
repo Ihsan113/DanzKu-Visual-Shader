@@ -4,6 +4,7 @@
 - FPS, Average, 1% Low, Frame Time dan refresh rate dihitung dari timestamp present asli tiap frame. Layer yang berhenti render >1.5 dtk dilaporkan 0 FPS.
 - Pemilihan layer FPS berbasis "layer yang benar-benar hidup" (frame terakhir baru / timestamp maju), bukan sekadar nama; rescan otomatis kalau layer beku; fallback `--timestats` (selisih totalFrames); kalau SurfaceFlinger idle tapi hook punya angka, hook dipakai.
 - Detail overlay menampilkan metode, nama layer, umur frame terakhir, dan jumlah kandidat untuk debugging.
+- Overlay FPS lebih real-time: shell root persisten (`RootShell`, tidak spawn `su` tiap tick), executor terpisah dari refresh status, PID/package di-cache 2.5 dtk (tiap tick cuma 1 perintah latency), tick 250 ms, jendela FPS 0.6 dtk.
 - Fix panel TUNE kepotong: area scroll tidak lagi dipatok 520dp. Tingginya dibatasi dinamis sesuai sisa layar (landscape juga), overlay di-clamp supaya tidak keluar layar, dan ada padding bawah agar kontrol terakhir bisa dijangkau penuh.
 - Overlay memakai FLAG_LAYOUT_IN_SCREEN + cutout SHORT_EDGES supaya koordinat konsisten di landscape.
 - Native module tidak berubah.

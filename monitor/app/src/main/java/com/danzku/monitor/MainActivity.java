@@ -68,6 +68,12 @@ public class MainActivity extends Activity {
     final SfFpsSampler sfSampler = new SfFpsSampler();
     volatile String lastSfReason = "";
     volatile String lastSfDiag = "";
+    // Executor + shell root khusus FPS overlay: tidak antre di belakang refresh status / edit config.
+    final ExecutorService fpsExecutor = Executors.newSingleThreadExecutor();
+    final RootShell sfShell = new RootShell(new String[]{"su"});
+    volatile RuntimeState cachedRuntime = new RuntimeState();
+    volatile long lastRuntimeReadMs = -1_000_000L;
+    volatile long lastOverlayCfgMs = -1_000_000L;
     MaxHeightScrollView overlayScroll;
 
     volatile boolean overlayDetailMode = false;
@@ -140,7 +146,12 @@ public class MainActivity extends Activity {
         if (hook.ready) hook.source = "hook (fallback)";
         SfFpsSampler.Stats sf;
         try {
-            sf = sfSampler.sample(st.packageName, cmd -> su(cmd), SystemClock.uptimeMillis(), System.nanoTime());
+            synchronized (sfSampler) {
+                sf = sfSampler.sample(st.packageName, cmd -> {
+                    String o = sfShell.run(cmd, 1500);
+                    return o != null ? o : su(cmd);
+                }, SystemClock.uptimeMillis(), System.nanoTime());
+            }
         } catch (Throwable t) {
             sf = new SfFpsSampler.Stats();
             sf.reason = t.toString();
@@ -207,7 +218,7 @@ public class MainActivity extends Activity {
             public void run() { refresh(); handler.postDelayed(this, 1000); }
         }, 1000);
         handler.postDelayed(new Runnable() {
-            public void run() { if (overlayVisible) updateOverlay(); handler.postDelayed(this, 500); }
+            public void run() { if (overlayVisible) updateOverlay(); handler.postDelayed(this, 250); }
         }, 500);
     }
 
@@ -220,6 +231,8 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         stopOverlay();
         ioExecutor.shutdownNow();
+        fpsExecutor.shutdownNow();
+        sfShell.close();
         super.onDestroy();
     }
 
@@ -2453,6 +2466,7 @@ public class MainActivity extends Activity {
     void stopOverlay() {
         if (!overlayVisible) return;
         try { if(wm!=null && overlayView!=null) wm.removeView(overlayView); } catch(Exception ignored){}
+        sfShell.close();
         overlayVisible=false; overlayCollapsed=false; overlayView=null; overlayPill=null; overlayText=null; overlayPanel=null; overlayQuickControls=null;
         overlayScroll=null; overlayHeader=null; overlayFpsText=null; overlayDetailText=null; overlayTuneButton=null; overlayDetailButton=null;
         overlayTuningMode=false; overlayFeatureSwitches.clear(); overlayFloatBars.clear(); overlayFloatLabels.clear();
@@ -2495,17 +2509,30 @@ public class MainActivity extends Activity {
     void updateOverlay() {
         if(!overlayVisible || overlayView==null) return;
         if(!overlayUpdateRunning.compareAndSet(false, true)) return;
-        ioExecutor.execute(() -> {
+        fpsExecutor.execute(() -> {
             try {
-                RuntimeState st=readRuntime();
-                lastRuntimePackage=st.packageName;
-                lastRuntimeReport=st.ready ? st.report : "";
-                lastRenderStats=resolveRenderStats(st);
-                String cfg = overlayTuningMode ? configText() : null;
+                long now = SystemClock.uptimeMillis();
+                // PID/package + report hook cukup dibaca tiap ~2.5 dtk; sisanya cuma 1 perintah latency per tick.
+                RuntimeState st = cachedRuntime;
+                if (now - lastRuntimeReadMs >= 2500L || st.packageName.length() == 0) {
+                    st = readRuntime();
+                    cachedRuntime = st;
+                    lastRuntimeReadMs = now;
+                    lastRuntimePackage = st.packageName;
+                    lastRuntimeReport = st.ready ? st.report : "";
+                }
+                lastRenderStats = resolveRenderStats(st);
+                String cfg = null;
+                if (overlayTuningMode && now - lastOverlayCfgMs >= 1500L) {
+                    cfg = configText();
+                    lastOverlayConfig = cfg == null ? "" : cfg;
+                    lastOverlayCfgMs = now;
+                }
+                final String cfgFinal = cfg;
                 runOnUiThread(() -> {
                     if(overlayVisible && overlayView!=null){
                         renderOverlayFromCache();
-                        if(cfg!=null) syncOverlayControls(cfg);
+                        if(cfgFinal!=null) syncOverlayControls(cfgFinal);
                         applyOverlayBounds();
                     }
                 });

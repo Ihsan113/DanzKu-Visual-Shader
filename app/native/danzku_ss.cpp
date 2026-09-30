@@ -38,6 +38,13 @@
 #define GL_FRAMEBUFFER_DEFAULT 0x8218
 #endif
 
+// OpenGL ES does not define GL_FRAMEBUFFER_ATTACHMENT_SAMPLES in core.
+// Multisample attachment sample queries use the EXT_multisampled_render_to_texture
+// token instead; keep a local fallback so older NDK headers still compile.
+#ifndef GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_SAMPLES_EXT
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_SAMPLES_EXT 0x8D6C
+#endif
+
 namespace dz_ss {
 namespace {
 
@@ -496,16 +503,12 @@ void GL_APIENTRY w_GetFramebufferAttachmentParameteriv(GLenum target, GLenum att
         case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME:
             *params = 0;
             break;
-        case GL_FRAMEBUFFER_ATTACHMENT_SAMPLES:
+        // GLES 3.x has no core GL_FRAMEBUFFER_ATTACHMENT_SAMPLES token.
+        // Virtualize the EXT_multisampled_render_to_texture query instead.
+        case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_SAMPLES_EXT:
             *params = S.default_samples;
             ++S.sample_queries_virtualized;
             break;
-#ifdef GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_SAMPLES
-        case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_SAMPLES:
-            *params = 0;
-            ++S.sample_queries_virtualized;
-            break;
-#endif
         case GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE:
         case GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE:
         case GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE:

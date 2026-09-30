@@ -44,3 +44,7 @@ Companion Android monitor/control APK for DanzKu Visual Shader V5.0.
 - Runtime status no longer assumes `com.mobile.legends` or `UnityKillsMe`; it resolves the active process and exact runtime report from the selected target package list.
 ### Multi-process runtime discovery
 The monitor checks all live processes for each selected package, including `package:process` names, and validates the runtime report PID before displaying READY. This avoids selecting a non-renderer process when an app such as Mobile Legends has a dedicated Unity process.
+
+## V5.3.0 patch: FPS root + fix TUNE
+- **FPS via root, bukan hook**: sumber utama = SurfaceFlinger (`dumpsys SurfaceFlinger --latency`). Hook hanya fallback.
+- **Fix TUNE kepotong**: tinggi area scroll mengikuti sisa layar; overlay di-clamp ke dalam layar.

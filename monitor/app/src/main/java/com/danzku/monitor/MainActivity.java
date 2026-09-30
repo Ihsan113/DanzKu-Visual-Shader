@@ -3,9 +3,11 @@ package com.danzku.monitor;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AlertDialog;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.provider.MediaStore;
 import android.content.ContentValues;
@@ -15,6 +17,7 @@ import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
@@ -39,7 +42,32 @@ public class MainActivity extends Activity {
         double onePctLow = -1.0;
         long hookCalls = -1L;
         boolean ready = false;
+        String source = "";
+        double refreshHz = -1.0;
     }
+
+    /** ScrollView dengan tinggi maksimum dinamis, supaya panel TUNE tidak pernah lebih tinggi dari layar. */
+    static class MaxHeightScrollView extends ScrollView {
+        private int maxHeightPx = 0;
+        MaxHeightScrollView(android.content.Context c) { super(c); }
+        void setMaxHeightPx(int px) {
+            if (px != maxHeightPx) { maxHeightPx = px; requestLayout(); }
+        }
+        @Override protected void onMeasure(int w, int h) {
+            if (maxHeightPx > 0) {
+                int mode = View.MeasureSpec.getMode(h);
+                int size = View.MeasureSpec.getSize(h);
+                int limit = mode == View.MeasureSpec.UNSPECIFIED ? maxHeightPx : Math.min(size, maxHeightPx);
+                h = View.MeasureSpec.makeMeasureSpec(limit, View.MeasureSpec.AT_MOST);
+            }
+            super.onMeasure(w, h);
+        }
+    }
+
+    // FPS via SurfaceFlinger (root), tanpa hook. Hanya dipakai dari ioExecutor (single thread).
+    final SfFpsSampler sfSampler = new SfFpsSampler();
+    volatile String lastSfReason = "";
+    MaxHeightScrollView overlayScroll;
 
     volatile boolean overlayDetailMode = false;
     final AtomicBoolean overlayUpdateRunning = new AtomicBoolean(false);
@@ -100,6 +128,34 @@ public class MainActivity extends Activity {
         String telemetryReady = value(report, "render_fps_telemetry_ready");
         out.ready = "1".equals(telemetryReady) || out.fps > 0.0 || out.hookCalls >= 0L;
         return out;
+    }
+
+    /**
+     * Sumber FPS utama = SurfaceFlinger lewat root (tidak butuh hook / modul aktif).
+     * Kalau SurfaceFlinger gagal, baru jatuh ke telemetry hook kalau ada.
+     */
+    RenderStats resolveRenderStats(RuntimeState st) {
+        RenderStats hook = st.ready ? parseRenderStats(st.report) : new RenderStats();
+        if (hook.ready) hook.source = "hook (fallback)";
+        SfFpsSampler.Stats sf;
+        try {
+            sf = sfSampler.sample(st.packageName, cmd -> su(cmd), SystemClock.uptimeMillis());
+        } catch (Throwable t) {
+            sf = new SfFpsSampler.Stats();
+            sf.reason = t.toString();
+        }
+        lastSfReason = sf.reason == null ? "" : sf.reason;
+        if (!sf.valid) return hook;
+        RenderStats r = new RenderStats();
+        r.fps = sf.fps > 0.0 ? sf.fps : (sf.fps == 0.0 ? 0.0 : -1.0);
+        r.averageFps = sf.averageFps;
+        r.frameTimeMs = sf.frameTimeMs;
+        r.onePctLow = sf.onePctLow;
+        r.refreshHz = sf.refreshHz;
+        r.hookCalls = hook.hookCalls;
+        r.ready = true;
+        r.source = "SurfaceFlinger (root)";
+        return r;
     }
 
     double parseDouble(String s) {
@@ -1653,13 +1709,8 @@ public class MainActivity extends Activity {
         RuntimeState st = readRuntime();
         String config = configText();
         HashSet<String> targets = readTargetPackages();
-        if (st.ready) {
-            lastRenderStats = parseRenderStats(st.report);
-            lastRuntimeReport = st.report;
-        } else {
-            lastRenderStats = new RenderStats();
-            lastRuntimeReport = "";
-        }
+        lastRenderStats = resolveRenderStats(st);
+        lastRuntimeReport = st.ready ? st.report : "";
 
         String targetSummary = targets.isEmpty() ? "Belum ada target" : "Target terdaftar: " + targets.size();
         String activeSummary;
@@ -1682,6 +1733,8 @@ public class MainActivity extends Activity {
                     "PID MATCH: " + (diagPidMatch ? "YES" : "NO") + "\n" +
                     "STAGE OK: " + (diagStage ? "YES" : "NO") + "\n" +
                     "Report: UNKNOWN\nRuntime report belum lolos validasi." +
+                    "\nRender FPS: " + fmt(lastRenderStats.fps) + " [" + orDash(lastRenderStats.source) + "]" +
+                    (lastRenderStats.fps < 0 && lastSfReason.length() > 0 ? "\nFPS root: " + lastSfReason : "") +
                     (diagError.length() > 0 ? "\nSU: " + diagError : "");
             runOnUiThread(() -> syncSwitches(null, config));
             return text;
@@ -1693,7 +1746,7 @@ public class MainActivity extends Activity {
         sb.append("ACTIVE APP: ").append(activeSummary).append("\n");
         sb.append("PID: ").append(st.pid).append("\n");
         sb.append("Report: READY (PID validated)\n");
-        sb.append("FPS source: ").append(orDash(value(st.report, "render_fps_source"))).append("\n\n");
+        sb.append("FPS source: ").append(orDash(lastRenderStats.source)).append("\n\n");
         sb.append("Render FPS: ").append(fmt(lastRenderStats.fps)).append("\n");
         sb.append("Frame Time: ").append(fmt(lastRenderStats.frameTimeMs)).append(" ms\n");
         sb.append("Average FPS: ").append(fmt(lastRenderStats.averageFps)).append("\n");
@@ -2184,7 +2237,7 @@ public class MainActivity extends Activity {
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
 
-        overlayHeader=tv("DANZKU V5.2.30");
+        overlayHeader=tv("DANZKU V5.3.0");
         overlayHeader.setTextColor(Color.WHITE);
         overlayHeader.setTextSize(11);
         overlayHeader.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
@@ -2221,15 +2274,16 @@ public class MainActivity extends Activity {
 
         overlayQuickControls = new LinearLayout(this);
         overlayQuickControls.setOrientation(LinearLayout.VERTICAL);
-        overlayQuickControls.setPadding(0, dp(5), 0, 0);
-        ScrollView scroll = new ScrollView(this);
+        overlayQuickControls.setPadding(0, dp(5), 0, dp(16));
+        MaxHeightScrollView scroll = new MaxHeightScrollView(this);
+        overlayScroll = scroll;
         scroll.setFillViewport(false);
         scroll.setVerticalScrollBarEnabled(true);
         scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         scroll.setVisibility(View.GONE);
         scroll.addView(overlayQuickControls,new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT,ScrollView.LayoutParams.WRAP_CONTENT));
-        panel.addView(scroll,new LinearLayout.LayoutParams(dp(330),dp(520)));
+        panel.addView(scroll,new LinearLayout.LayoutParams(dp(330),LinearLayout.LayoutParams.WRAP_CONTENT));
         overlayPill=tv("◉  DanzKu  •  FPS --  ▴");
         overlayPill.setTextSize(12);
         overlayPill.setTextColor(Color.WHITE);
@@ -2252,6 +2306,7 @@ public class MainActivity extends Activity {
             overlayCollapsed=false;
             overlayPill.setVisibility(View.GONE);
             panel.setVisibility(View.VISIBLE);
+            overlayView.post(this::applyOverlayBounds);
         });
         overlayPill.setOnTouchListener(new View.OnTouchListener() {
             int downX, downY, baseX, baseY; boolean moved;
@@ -2264,12 +2319,12 @@ public class MainActivity extends Activity {
                 if(e.getAction()==MotionEvent.ACTION_MOVE){
                     int dx=(int)e.getRawX()-downX, dy=(int)e.getRawY()-downY;
                     if(Math.abs(dx)>dp(6)||Math.abs(dy)>dp(6))moved=true;
-                    if(moved){lp.x=baseX+dx;lp.y=baseY+dy;wm.updateViewLayout(overlayView,lp);}
+                    if(moved){lp.x=baseX+dx;lp.y=baseY+dy;wm.updateViewLayout(overlayView,lp);applyOverlayBounds();}
                     return true;
                 }
                 if(e.getAction()==MotionEvent.ACTION_UP){
                     if(moved && prefs!=null) prefs.edit().putInt("overlay_x",lp.x).putInt("overlay_y",lp.y).apply();
-                    else { overlayCollapsed=false; overlayPill.setVisibility(View.GONE); panel.setVisibility(View.VISIBLE); }
+                    else { overlayCollapsed=false; overlayPill.setVisibility(View.GONE); panel.setVisibility(View.VISIBLE); overlayView.post(() -> applyOverlayBounds()); }
                     return true;
                 }
                 return true;
@@ -2280,6 +2335,7 @@ public class MainActivity extends Activity {
             overlayTuningMode=!overlayTuningMode;
             scroll.setVisibility(overlayTuningMode?View.VISIBLE:View.GONE);
             overlayTuneButton.setText(overlayTuningMode?"HIDE":"TUNE");
+            overlayView.post(this::applyOverlayBounds);
             if(overlayTuningMode) {
                 ioExecutor.execute(() -> {
                     String cfg=configText();
@@ -2291,6 +2347,7 @@ public class MainActivity extends Activity {
             overlayDetailMode=!overlayDetailMode;
             if (overlayDetailText != null) overlayDetailText.setVisibility(overlayDetailMode ? View.VISIBLE : View.GONE);
             renderOverlayFromCache();
+            overlayView.post(this::applyOverlayBounds);
         });
         close.setOnClickListener(v -> stopOverlay());
 
@@ -2299,16 +2356,64 @@ public class MainActivity extends Activity {
         WindowManager.LayoutParams lp=new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
+        lp.layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         lp.gravity=Gravity.TOP|Gravity.START;
         lp.x=prefs!=null?prefs.getInt("overlay_x",16):16;
         lp.y=prefs!=null?prefs.getInt("overlay_y",80):80;
         wm.addView(overlayView,lp);
         overlayVisible=true;
         buildOverlayQuickControls();
+        overlayView.post(this::applyOverlayBounds);
         updateOverlay();
         updateOverlayPermissionUi();
+    }
+
+    /**
+     * Jaga overlay tetap di dalam layar dan batasi tinggi area TUNE sesuai sisa layar.
+     * Sebelumnya area scroll dipatok 520dp; di landscape (tinggi layar ~410dp) bagian
+     * bawahnya keluar layar sehingga kontrol paling bawah tidak bisa dijangkau.
+     */
+    void applyOverlayBounds() {
+        if (!overlayVisible || overlayView == null || overlayPanel == null || wm == null || overlayScroll == null) return;
+        int screenW, screenH;
+        if (Build.VERSION.SDK_INT >= 30) {
+            Rect b = wm.getMaximumWindowMetrics().getBounds();
+            screenW = b.width(); screenH = b.height();
+        } else {
+            DisplayMetrics m = new DisplayMetrics();
+            wm.getDefaultDisplay().getRealMetrics(m);
+            screenW = m.widthPixels; screenH = m.heightPixels;
+        }
+        WindowManager.LayoutParams lp = (WindowManager.LayoutParams) overlayView.getLayoutParams();
+        if (lp == null) return;
+        int before_x = lp.x, before_y = lp.y;
+        int margin = dp(8);
+        boolean tuning = overlayScroll.getVisibility() == View.VISIBLE;
+
+        // tinggi "chrome" panel = header + detail + padding (semua di luar area scroll)
+        int scrollH = tuning ? overlayScroll.getHeight() : 0;
+        int chrome = overlayPanel.getHeight() - scrollH;
+        if (overlayPanel.getVisibility() != View.VISIBLE || chrome < dp(40)) chrome = dp(56);
+
+        int panelW = overlayPanel.getWidth() > 0 ? overlayPanel.getWidth() : dp(346);
+        int maxX = Math.max(0, screenW - Math.min(panelW, screenW));
+        if (lp.x > maxX) lp.x = maxX;
+        if (lp.x < 0) lp.x = 0;
+
+        int minScroll = dp(150);
+        int maxY = tuning ? Math.max(0, screenH - chrome - minScroll - margin) : Math.max(0, screenH - dp(48));
+        if (lp.y > maxY) lp.y = maxY;
+        if (lp.y < 0) lp.y = 0;
+
+        if (tuning) {
+            int maxH = screenH - lp.y - chrome - margin;
+            overlayScroll.setMaxHeightPx(Math.max(dp(80), maxH));
+        }
+        if (lp.x != before_x || lp.y != before_y) {
+            try { wm.updateViewLayout(overlayView, lp); } catch (Exception ignored) {}
+        }
     }
 
     View.OnTouchListener makeOverlayDragListener() {
@@ -2324,7 +2429,7 @@ public class MainActivity extends Activity {
                 if(e.getAction()==MotionEvent.ACTION_MOVE){
                     int dx=(int)e.getRawX()-downX,dy=(int)e.getRawY()-downY;
                     if(Math.abs(dx)>dp(6)||Math.abs(dy)>dp(6))moved=true;
-                    if(moved){lp.x=baseX+dx;lp.y=baseY+dy;wm.updateViewLayout(v.getRootView(),lp);}
+                    if(moved){lp.x=baseX+dx;lp.y=baseY+dy;wm.updateViewLayout(v.getRootView(),lp);applyOverlayBounds();}
                     return true;
                 }
                 if(e.getAction()==MotionEvent.ACTION_UP){
@@ -2343,7 +2448,7 @@ public class MainActivity extends Activity {
         if (!overlayVisible) return;
         try { if(wm!=null && overlayView!=null) wm.removeView(overlayView); } catch(Exception ignored){}
         overlayVisible=false; overlayCollapsed=false; overlayView=null; overlayPill=null; overlayText=null; overlayPanel=null; overlayQuickControls=null;
-        overlayHeader=null; overlayFpsText=null; overlayDetailText=null; overlayTuneButton=null; overlayDetailButton=null;
+        overlayScroll=null; overlayHeader=null; overlayFpsText=null; overlayDetailText=null; overlayTuneButton=null; overlayDetailButton=null;
         overlayTuningMode=false; overlayFeatureSwitches.clear(); overlayFloatBars.clear(); overlayFloatLabels.clear();
         updateOverlayPermissionUi();
     }
@@ -2354,7 +2459,7 @@ public class MainActivity extends Activity {
         String report=lastRuntimeReport;
         overlayFpsText.setText("FPS " + fmt(render.fps));
         if (overlayPill != null) overlayPill.setText("◉  DanzKu  •  FPS " + fmt(render.fps) + "  ▴");
-        StringBuilder b=new StringBuilder("DANZKU V5.2.30");
+        StringBuilder b=new StringBuilder("DANZKU V5.3.0");
         if (lastRuntimePackage != null && lastRuntimePackage.length()>0) {
             b.append(" • ").append(appLabel(lastRuntimePackage));
         }
@@ -2369,6 +2474,10 @@ public class MainActivity extends Activity {
         d.append("FPS ").append(fmt(render.fps)).append("  ");
         d.append("Frame ").append(fmt(render.frameTimeMs)).append(" ms\n");
         d.append("Avg ").append(fmt(render.averageFps)).append("  1% ").append(fmt(render.onePctLow)).append("\n");
+        d.append("Src ").append(orDash(render.source));
+        if (render.refreshHz > 0) d.append("  ").append(fmt(render.refreshHz)).append("Hz");
+        if (render.fps < 0 && lastSfReason.length() > 0) d.append("\n").append(lastSfReason);
+        d.append("\n");
         d.append("SS ").append(orDash(value(report,"ss_requested_scale"))).append(" -> ").append(orDash(value(report,"ss_effective_scale"))).append("\n");
         d.append("SS State ").append(orDash(value(report,"ss_state"))).append("\n");
         d.append("Handoff ").append(orDash(value(report,"ss_downstream_handoff_ok"))).append("  Fail ").append(orDash(value(report,"ss_downstream_handoff_fail"))).append("\n");
@@ -2382,16 +2491,15 @@ public class MainActivity extends Activity {
         ioExecutor.execute(() -> {
             try {
                 RuntimeState st=readRuntime();
-                if(!st.ready){
-                    lastRenderStats=new RenderStats(); lastRuntimeReport=""; lastRuntimePackage="";
-                } else {
-                    lastRuntimeReport=st.report; lastRuntimePackage=st.packageName; lastRenderStats=parseRenderStats(st.report);
-                }
+                lastRuntimePackage=st.packageName;
+                lastRuntimeReport=st.ready ? st.report : "";
+                lastRenderStats=resolveRenderStats(st);
                 String cfg = overlayTuningMode ? configText() : null;
                 runOnUiThread(() -> {
                     if(overlayVisible && overlayView!=null){
                         renderOverlayFromCache();
                         if(cfg!=null) syncOverlayControls(cfg);
+                        applyOverlayBounds();
                     }
                 });
             } finally { overlayUpdateRunning.set(false); }

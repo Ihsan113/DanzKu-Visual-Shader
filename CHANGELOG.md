@@ -1,3 +1,11 @@
+# Monitor APK patch (V5.3.0) — FPS overlay via root (tanpa hook) + fix panel TUNE kepotong
+
+- FPS overlay sekarang dibaca langsung oleh APK lewat root: `dumpsys SurfaceFlinger --latency <layer>` (layer game dicari otomatis dari `--list`). Tidak butuh hook `eglSwapBuffers` / modul aktif. Hook hanya jadi fallback kalau SurfaceFlinger tidak memberi data; sumbernya ditampilkan di Detail (`Src`).
+- FPS, Average, 1% Low, Frame Time dan refresh rate dihitung dari timestamp present asli tiap frame. Layer yang berhenti render >1.5 dtk dilaporkan 0 FPS.
+- Fix panel TUNE kepotong: area scroll tidak lagi dipatok 520dp. Tingginya dibatasi dinamis sesuai sisa layar (landscape juga), overlay di-clamp supaya tidak keluar layar, dan ada padding bawah agar kontrol terakhir bisa dijangkau penuh.
+- Overlay memakai FLAG_LAYOUT_IN_SCREEN + cutout SHORT_EDGES supaya koordinat konsisten di landscape.
+- Native module tidak berubah.
+
 # DanzKu Visual Shader V5.3.0 — DLSS-like Additive Reconstruction + True SS 2.0 Foundations
 
 - Rebuilt the native post-process compositing path around one accumulated `current` color so Sharpen, Clarity, Material, Edge, Neural/AI, Shadow, AO, Specular, Reflection, Lighting, Effects, Texture and Color stages can be enabled together without the AI stage replacing earlier work.

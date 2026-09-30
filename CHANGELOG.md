@@ -1,3 +1,10 @@
+## V5.2.28 — True SS Diagnostic Build
+
+- Adds dedicated `danzku_ss_diag_<pid>.log` snapshots every ~30 swaps.
+- Records wrapper-entry state, swap/render-thread separation, function-resolution source, pointer-selection results, viewport input vs scaled driver viewport, pre-swap FBO/viewport mismatches, and relevant `glGetIntegerv` query counts.
+- Expands `danzku_v40_init_fail_<pid>.txt` with init stage, GL error, shader log, dimensions, and SS configuration.
+- Diagnostic instrumentation is read-only with respect to rendering behavior; no supersampling math or resolve path is intentionally changed.
+
 # V5.2.27 — zoom-bug fix, POCO M5 Tuning / Low-Memory History removed
 
 - **Zoom bug fix (danzku_ss.cpp, try_engage()).** Root-caused from a report

@@ -995,6 +995,26 @@ static void v27_set_init_diag(const char* stage,
     g_v27_init_gl_error = err;
 }
 
+static void v27_write_init_fail_report(int width, int height) {
+    if (!g_v27_logging_value || g_app_files_dir.empty()) return;
+    char err_buf[32] = {};
+    snprintf(err_buf, sizeof(err_buf), "0x%04x", static_cast<unsigned int>(g_v27_init_gl_error));
+    std::string out = "stage=v40_init_fail\n";
+    out += "pid=" + std::to_string((int)getpid()) + "\n";
+    out += "width=" + std::to_string(width) + "\n";
+    out += "height=" + std::to_string(height) + "\n";
+    out += "init_stage=" + g_v27_init_stage + "\n";
+    out += "init_gl_error=" + std::string(err_buf) + "\n";
+    out += "shader_log=" + g_v27_shader_log + "\n";
+    out += "v40_enabled=" + std::to_string(g_v27_enabled_value ? 1 : 0) + "\n";
+    out += "logging=" + std::to_string(g_v27_logging_value ? 1 : 0) + "\n";
+    out += "ss_enabled=" + std::to_string(g_ss_enabled_value ? 1 : 0) + "\n";
+    out += "ss_scale=" + std::to_string(g_ss_scale_value) + "\n";
+    out += "ss_max_pixels=" + std::to_string(g_ss_max_pixels_value) + "\n";
+    out += "note=V40 init failure is logged separately from True Supersampling state; this file does not prove SS hook failure.\n";
+    write_file(g_app_files_dir + "/danzku_v40_init_fail_" + std::to_string((int)getpid()) + ".txt", out);
+}
+
 static GLuint v27_compile_shader(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
     if (!shader) {
@@ -1027,7 +1047,18 @@ static bool v27_init(int width, int height) {
     pthread_mutex_lock(&g_v27_mutex);
     v27_set_init_diag("enter");
     if (g_v27_initialized) { pthread_mutex_unlock(&g_v27_mutex); return true; }
-    if (g_v27_failed || width <= 0 || height <= 0) { pthread_mutex_unlock(&g_v27_mutex); return false; }
+    if (g_v27_failed) {
+        v27_set_init_diag("previous_failure", g_v27_shader_log, g_v27_init_gl_error);
+        v27_write_init_fail_report(width, height);
+        pthread_mutex_unlock(&g_v27_mutex);
+        return false;
+    }
+    if (width <= 0 || height <= 0) {
+        v27_set_init_diag("invalid_surface_dimensions");
+        v27_write_init_fail_report(width, height);
+        pthread_mutex_unlock(&g_v27_mutex);
+        return false;
+    }
     parse_v27_config();
     apply_v27_native_control();
     g_v27_config_check_ns = monotonic_ns();
@@ -2528,8 +2559,7 @@ static EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
             v27 += "height=" + std::to_string((int)h) + "\n";
             if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v40_init_" + std::to_string((int)getpid()) + ".txt", v27);
         } else {
-            if (g_v27_logging_value) write_file(g_app_files_dir + "/danzku_v40_init_fail_" + std::to_string((int)getpid()) + ".txt",
-                       "stage=v40_init_fail\npid=" + std::to_string((int)getpid()) + "\n");
+            v27_write_init_fail_report((int)w, (int)h);
         }
     }
     if (g_v27_enabled_value && !g_v27_initialized) {

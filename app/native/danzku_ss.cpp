@@ -178,9 +178,13 @@ struct Entry {
     void* wrapper;
     void** real;
     unsigned long long calls;
+    unsigned long long calls_inactive;
+    unsigned long long calls_other_thread;
     unsigned long long req[SRC_COUNT];
+    unsigned long long req_before_enabled[SRC_COUNT];
     void* seen[SRC_COUNT];
     unsigned int patched;
+    void* last_returned;
 };
 Entry g_entries[E_COUNT];
 
@@ -198,6 +202,7 @@ struct OtherViewport { int w, h; unsigned long long draws; };
 struct Engine {
     Options opt;
     std::string report_path;
+    std::string diag_path;
     int state = ST_OFF;
     std::string fail_reason;
     const char* fallback_reason = "";
@@ -251,6 +256,37 @@ struct Engine {
     int resolve_src_w = 0, resolve_src_h = 0, resolve_dst_w = 0, resolve_dst_h = 0;
     unsigned long long apply_errors = 0;
 
+    // Dedicated diagnosis telemetry. These counters intentionally distinguish
+    // "wrapper was entered" from "wrapper actually redirected state" so a
+    // separate render thread / cached pointer can be proven from one session.
+    unsigned long long wrapper_calls_total = 0;
+    unsigned long long wrapper_calls_inactive = 0;
+    unsigned long long wrapper_calls_other_thread = 0;
+    unsigned long long wrapper_calls_active = 0;
+    unsigned long long viewport_non_surface = 0;
+    unsigned long long viewport_full_surface = 0;
+    unsigned long long viewport_zero_or_negative = 0;
+    unsigned long long bind_default = 0, bind_nondefault = 0;
+    unsigned long long get_viewport_queries = 0, get_fbo_queries = 0;
+    unsigned long long get_dimension_queries = 0;
+    unsigned long long pre_swap_samples = 0;
+    unsigned long long pre_swap_fbo_mismatch = 0;
+    unsigned long long pre_swap_viewport_mismatch = 0;
+    unsigned long long pre_swap_scissor_mismatch = 0;
+    unsigned long long ss_active_non_render_thread_draws = 0;
+    unsigned long long diag_seq = 0;
+    unsigned long long diag_last_dump_swap = 0;
+    unsigned long long swap_thread_tag = 0;
+    unsigned long long last_wrapper_thread_tag = 0;
+    unsigned long long last_other_thread_tag = 0;
+    void* last_wrapper_return = nullptr;
+    GLint diag_last_driver_vp[4] = {0,0,0,0};
+    GLint diag_last_driver_sc[4] = {0,0,0,0};
+    GLint diag_last_game_vp[4] = {0,0,0,0};
+    GLint diag_last_scaled_vp[4] = {0,0,0,0};
+    GLint diag_last_bind_draw = 0, diag_last_bind_read = 0;
+    unsigned long long diag_last_draw_call = 0;
+
     unsigned table_scans = 0;
     unsigned table_patched_total = 0;
     unsigned table_ambiguous = 0;
@@ -263,6 +299,32 @@ std::atomic<int> g_engaged{0};
 thread_local int t_mark = 0;
 
 inline bool ss_active() { return t_mark != 0 && g_engaged.load(std::memory_order_relaxed) != 0; }
+
+inline unsigned long long thread_tag() {
+    return static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(pthread_self()));
+}
+
+inline bool on_swap_thread() {
+    return S.swap_thread_tag == 0 || S.swap_thread_tag == thread_tag();
+}
+
+static std::string hex_ptr_local(const void* p) {
+    char b[32] = {};
+    snprintf(b, sizeof(b), "0x%llx", static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(p)));
+    return b;
+}
+
+inline void diag_add(unsigned long long* p, unsigned long long n = 1ULL) {
+    __atomic_fetch_add(p, n, __ATOMIC_RELAXED);
+}
+
+inline unsigned long long diag_load(const unsigned long long* p) {
+    return __atomic_load_n(p, __ATOMIC_RELAXED);
+}
+
+inline void diag_store(unsigned long long* p, unsigned long long v) {
+    __atomic_store_n(p, v, __ATOMIC_RELAXED);
+}
 
 void request_fallback(const char* reason) {
     if (!S.pending_reason) { S.pending_reason = reason; S.pending_benign = false; }
@@ -351,10 +413,26 @@ inline void note_draw() {
 // ---------------------------------------------------------------------------
 void GL_APIENTRY w_BindFramebuffer(GLenum target, GLuint fb) {
     count_call(E_BindFramebuffer);
+    diag_add(&S.wrapper_calls_total);
+    diag_store(&S.last_wrapper_thread_tag, thread_tag());
+    if (!ss_active()) {
+        diag_add(&g_entries[E_BindFramebuffer].calls_inactive);
+        if (g_engaged.load(std::memory_order_relaxed) && !on_swap_thread()) {
+            diag_add(&g_entries[E_BindFramebuffer].calls_other_thread);
+            diag_add(&S.wrapper_calls_other_thread);
+            diag_store(&S.last_other_thread_tag, thread_tag());
+        } else {
+            diag_add(&S.wrapper_calls_inactive);
+        }
+    }
     if (!ss_active() ||
         (target != GL_FRAMEBUFFER && target != GL_DRAW_FRAMEBUFFER && target != GL_READ_FRAMEBUFFER)) {
         gl.BindFramebuffer(target, fb);
         return;
+    }
+    if (ss_active()) {
+        diag_add(&S.wrapper_calls_active);
+        if (fb == 0) diag_add(&S.bind_default); else diag_add(&S.bind_nondefault);
     }
     const GLuint app = (fb == S.fbo) ? 0u : fb;   // the game must never see our FBO name
     if (app == 0 && eglGetCurrentContext() != S.ctx) {
@@ -376,11 +454,31 @@ void GL_APIENTRY w_BindFramebuffer(GLenum target, GLuint fb) {
 
 void GL_APIENTRY w_Viewport(GLint x, GLint y, GLsizei w, GLsizei h) {
     count_call(E_Viewport);
-    if (!ss_active()) { gl.Viewport(x, y, w, h); return; }
+    diag_add(&S.wrapper_calls_total);
+    diag_store(&S.last_wrapper_thread_tag, thread_tag());
+    if (!ss_active()) {
+        diag_add(&g_entries[E_Viewport].calls_inactive);
+        if (g_engaged.load(std::memory_order_relaxed) && !on_swap_thread()) {
+            diag_add(&g_entries[E_Viewport].calls_other_thread);
+            diag_add(&S.wrapper_calls_other_thread);
+            diag_store(&S.last_other_thread_tag, thread_tag());
+        } else {
+            diag_add(&S.wrapper_calls_inactive);
+        }
+        gl.Viewport(x, y, w, h); return;
+    }
+    diag_add(&S.wrapper_calls_active);
     S.app_vp[0] = x; S.app_vp[1] = y; S.app_vp[2] = w; S.app_vp[3] = h;
+    std::memcpy(S.diag_last_game_vp, S.app_vp, sizeof(S.app_vp));
+    GLint dv[4] = {0,0,0,0};
+    scale_rect(x, y, w, h, dv);
+    std::memcpy(S.diag_last_scaled_vp, dv, sizeof(dv));
+    if (w <= 0 || h <= 0) diag_add(&S.viewport_zero_or_negative);
+    if (w == S.surf_w && h == S.surf_h && x == 0 && y == 0) diag_add(&S.viewport_full_surface);
+    else diag_add(&S.viewport_non_surface);
     if (S.app_draw == 0) {
         GLint v[4];
-        scale_rect(x, y, w, h, v);
+        std::memcpy(v, dv, sizeof(v));
         gl.Viewport(v[0], v[1], v[2], v[3]);
         ++S.redirect_viewports;
         std::memcpy(S.last_app_vp, S.app_vp, sizeof(S.app_vp));
@@ -392,7 +490,20 @@ void GL_APIENTRY w_Viewport(GLint x, GLint y, GLsizei w, GLsizei h) {
 
 void GL_APIENTRY w_Scissor(GLint x, GLint y, GLsizei w, GLsizei h) {
     count_call(E_Scissor);
-    if (!ss_active()) { gl.Scissor(x, y, w, h); return; }
+    diag_add(&S.wrapper_calls_total);
+    diag_store(&S.last_wrapper_thread_tag, thread_tag());
+    if (!ss_active()) {
+        diag_add(&g_entries[E_Scissor].calls_inactive);
+        if (g_engaged.load(std::memory_order_relaxed) && !on_swap_thread()) {
+            diag_add(&g_entries[E_Scissor].calls_other_thread);
+            diag_add(&S.wrapper_calls_other_thread);
+            diag_store(&S.last_other_thread_tag, thread_tag());
+        } else {
+            diag_add(&S.wrapper_calls_inactive);
+        }
+        gl.Scissor(x, y, w, h); return;
+    }
+    diag_add(&S.wrapper_calls_active);
     S.app_sc[0] = x; S.app_sc[1] = y; S.app_sc[2] = w; S.app_sc[3] = h;
     if (S.app_draw == 0) {
         GLint s[4];
@@ -483,8 +594,26 @@ void GL_APIENTRY w_ReadBuffer(GLenum mode) {
 
 void GL_APIENTRY w_GetIntegerv(GLenum pname, GLint* data) {
     count_call(E_GetIntegerv);
+    diag_add(&S.wrapper_calls_total);
+    diag_store(&S.last_wrapper_thread_tag, thread_tag());
+    if (!ss_active()) {
+        diag_add(&g_entries[E_GetIntegerv].calls_inactive);
+        if (g_engaged.load(std::memory_order_relaxed) && !on_swap_thread()) {
+            diag_add(&g_entries[E_GetIntegerv].calls_other_thread);
+            diag_add(&S.wrapper_calls_other_thread);
+            diag_store(&S.last_other_thread_tag, thread_tag());
+        } else {
+            diag_add(&S.wrapper_calls_inactive);
+        }
+        gl.GetIntegerv(pname, data);
+        return;
+    }
+    diag_add(&S.wrapper_calls_active);
+    if (pname == GL_VIEWPORT) diag_add(&S.get_viewport_queries);
+    else if (pname == GL_FRAMEBUFFER_BINDING || pname == GL_DRAW_FRAMEBUFFER_BINDING || pname == GL_READ_FRAMEBUFFER_BINDING) diag_add(&S.get_fbo_queries);
+    else if (pname == GL_MAX_VIEWPORT_DIMS || pname == GL_MAX_TEXTURE_SIZE || pname == GL_MAX_RENDERBUFFER_SIZE) diag_add(&S.get_dimension_queries);
     gl.GetIntegerv(pname, data);
-    if (!data || !ss_active()) return;
+    if (!data) return;
     switch (pname) {
         case GL_DRAW_FRAMEBUFFER_BINDING:   // == GL_FRAMEBUFFER_BINDING
             if (static_cast<GLuint>(*data) == S.fbo) *data = 0;
@@ -523,20 +652,38 @@ void GL_APIENTRY w_CopyTexSubImage3D(GLenum t, GLint l, GLint xo, GLint yo, GLin
     gl.CopyTexSubImage3D(t, l, xo, yo, zo, x, y, w, h);
 }
 
+inline void note_wrapper_draw(int id) {
+    diag_store(&S.last_wrapper_thread_tag, thread_tag());
+    ++S.diag_last_draw_call;
+    if (!ss_active()) {
+        diag_add(&g_entries[id].calls_inactive);
+        diag_add(&S.wrapper_calls_inactive);
+        if (g_engaged.load(std::memory_order_relaxed) && !on_swap_thread()) {
+            diag_add(&g_entries[id].calls_other_thread);
+            diag_add(&S.wrapper_calls_other_thread);
+            diag_add(&S.ss_active_non_render_thread_draws);
+            diag_store(&S.last_other_thread_tag, thread_tag());
+        }
+        return;
+    }
+    diag_add(&S.wrapper_calls_active);
+    note_draw();
+}
+
 void GL_APIENTRY w_DrawArrays(GLenum m, GLint f, GLsizei c) {
-    count_call(E_DrawArrays); note_draw(); gl.DrawArrays(m, f, c);
+    count_call(E_DrawArrays); note_wrapper_draw(E_DrawArrays); gl.DrawArrays(m, f, c);
 }
 void GL_APIENTRY w_DrawElements(GLenum m, GLsizei c, GLenum t, const void* i) {
-    count_call(E_DrawElements); note_draw(); gl.DrawElements(m, c, t, i);
+    count_call(E_DrawElements); note_wrapper_draw(E_DrawElements); gl.DrawElements(m, c, t, i);
 }
 void GL_APIENTRY w_DrawArraysInstanced(GLenum m, GLint f, GLsizei c, GLsizei n) {
-    count_call(E_DrawArraysInstanced); note_draw(); gl.DrawArraysInstanced(m, f, c, n);
+    count_call(E_DrawArraysInstanced); note_wrapper_draw(E_DrawArraysInstanced); gl.DrawArraysInstanced(m, f, c, n);
 }
 void GL_APIENTRY w_DrawElementsInstanced(GLenum m, GLsizei c, GLenum t, const void* i, GLsizei n) {
-    count_call(E_DrawElementsInstanced); note_draw(); gl.DrawElementsInstanced(m, c, t, i, n);
+    count_call(E_DrawElementsInstanced); note_wrapper_draw(E_DrawElementsInstanced); gl.DrawElementsInstanced(m, c, t, i, n);
 }
 void GL_APIENTRY w_DrawRangeElements(GLenum m, GLuint s, GLuint e, GLsizei c, GLenum t, const void* i) {
-    count_call(E_DrawRangeElements); note_draw(); gl.DrawRangeElements(m, s, e, c, t, i);
+    count_call(E_DrawRangeElements); note_wrapper_draw(E_DrawRangeElements); gl.DrawRangeElements(m, s, e, c, t, i);
 }
 
 void init_entries() {
@@ -948,6 +1095,62 @@ bool resolve_to_default(int sw, int sh) {
 // Lifecycle
 // ---------------------------------------------------------------------------
 void write_report_file();
+const char* state_name();
+
+static void write_diag_snapshot(const char* phase) {
+    if (S.diag_path.empty() || !S.opt.logging) return;
+    ++S.diag_seq;
+    std::string o;
+    o += "seq=" + std::to_string(S.diag_seq) + "\n";
+    o += "phase=" + std::string(phase ? phase : "unknown") + "\n";
+    o += "swap_count=" + std::to_string(S.swaps) + "\n";
+    o += "state=" + std::string(state_name()) + "\n";
+    o += "swap_thread_tag=" + hex_ptr_local(reinterpret_cast<void*>(static_cast<uintptr_t>(S.swap_thread_tag))) + "\n";
+    o += "last_wrapper_thread_tag=" + hex_ptr_local(reinterpret_cast<void*>(static_cast<uintptr_t>(diag_load(&S.last_wrapper_thread_tag)))) + "\n";
+    o += "last_other_thread_tag=" + hex_ptr_local(reinterpret_cast<void*>(static_cast<uintptr_t>(diag_load(&S.last_other_thread_tag)))) + "\n";
+    o += "g_engaged=" + std::to_string(g_engaged.load(std::memory_order_relaxed)) + "\n";
+    o += "t_mark_on_swap_thread=" + std::to_string(t_mark) + "\n";
+    o += "wrapper_calls_total=" + std::to_string(diag_load(&S.wrapper_calls_total)) + "\n";
+    o += "wrapper_calls_active=" + std::to_string(diag_load(&S.wrapper_calls_active)) + "\n";
+    o += "wrapper_calls_inactive=" + std::to_string(diag_load(&S.wrapper_calls_inactive)) + "\n";
+    o += "wrapper_calls_other_thread=" + std::to_string(diag_load(&S.wrapper_calls_other_thread)) + "\n";
+    o += "draws_other_thread=" + std::to_string(diag_load(&S.ss_active_non_render_thread_draws)) + "\n";
+    o += "bind_draw=" + std::to_string(S.diag_last_bind_draw) + "\n";
+    o += "bind_read=" + std::to_string(S.diag_last_bind_read) + "\n";
+    o += "game_viewport=" + std::to_string(S.diag_last_game_vp[0]) + "," + std::to_string(S.diag_last_game_vp[1]) + "," + std::to_string(S.diag_last_game_vp[2]) + "," + std::to_string(S.diag_last_game_vp[3]) + "\n";
+    o += "scaled_viewport=" + std::to_string(S.diag_last_scaled_vp[0]) + "," + std::to_string(S.diag_last_scaled_vp[1]) + "," + std::to_string(S.diag_last_scaled_vp[2]) + "," + std::to_string(S.diag_last_scaled_vp[3]) + "\n";
+    o += "driver_viewport=" + std::to_string(S.diag_last_driver_vp[0]) + "," + std::to_string(S.diag_last_driver_vp[1]) + "," + std::to_string(S.diag_last_driver_vp[2]) + "," + std::to_string(S.diag_last_driver_vp[3]) + "\n";
+    o += "driver_scissor=" + std::to_string(S.diag_last_driver_sc[0]) + "," + std::to_string(S.diag_last_driver_sc[1]) + "," + std::to_string(S.diag_last_driver_sc[2]) + "," + std::to_string(S.diag_last_driver_sc[3]) + "\n";
+    o += "surface=" + dim(S.surf_w, S.surf_h) + "\n";
+    o += "ss_render=" + dim(S.ss_w, S.ss_h) + "\n";
+    o += "scale=" + std::to_string(S.scale_eff) + "\n";
+    o += "viewport_full_surface=" + std::to_string(diag_load(&S.viewport_full_surface)) + "\n";
+    o += "viewport_non_surface=" + std::to_string(diag_load(&S.viewport_non_surface)) + "\n";
+    o += "viewport_zero_or_negative=" + std::to_string(diag_load(&S.viewport_zero_or_negative)) + "\n";
+    o += "pre_swap_samples=" + std::to_string(diag_load(&S.pre_swap_samples)) + "\n";
+    o += "pre_swap_fbo_mismatch=" + std::to_string(diag_load(&S.pre_swap_fbo_mismatch)) + "\n";
+    o += "pre_swap_viewport_mismatch=" + std::to_string(diag_load(&S.pre_swap_viewport_mismatch)) + "\n";
+    o += "pre_swap_scissor_mismatch=" + std::to_string(diag_load(&S.pre_swap_scissor_mismatch)) + "\n";
+    o += "functions:\n";
+    for (int i = 0; i < E_COUNT; ++i) {
+        const Entry& e = g_entries[i];
+        if (!e.name || (!e.req[SRC_PROC] && !e.req[SRC_DLSYM] && !e.req[SRC_TABLE] && !e.calls)) continue;
+        char b[768] = {};
+        snprintf(b, sizeof(b),
+                 "%s proc=%llu dlsym=%llu table=%llu before_enable=%llu/%llu/%llu calls=%llu inactive=%llu other_thread=%llu patched=%u selected=%s orig_proc=%s orig_dlsym=%s last=%s\n",
+                 e.name, e.req[SRC_PROC], e.req[SRC_DLSYM], e.req[SRC_TABLE],
+                 e.req_before_enabled[SRC_PROC], e.req_before_enabled[SRC_DLSYM], e.req_before_enabled[SRC_TABLE],
+                 e.calls, e.calls_inactive, e.calls_other_thread, e.patched,
+                 __atomic_load_n(&e.last_returned, __ATOMIC_RELAXED) == e.wrapper ? "wrapper" : (__atomic_load_n(&e.last_returned, __ATOMIC_RELAXED) ? "real" : "null"),
+                 hex_ptr_local(e.seen[SRC_PROC]).c_str(), hex_ptr_local(e.seen[SRC_DLSYM]).c_str(), hex_ptr_local(__atomic_load_n(&e.last_returned, __ATOMIC_RELAXED)).c_str());
+        o += b;
+    }
+    o += "---\n";
+    int fd = open(S.diag_path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+    if (fd < 0) return;
+    (void)write(fd, o.data(), o.size());
+    close(fd);
+}
 
 void set_failed(const std::string& reason) {
     S.state = ST_FAILED;
@@ -1052,6 +1255,25 @@ void try_engage(EGLDisplay dpy, EGLSurface surface) {
     std::memset(S.other_vp, 0, sizeof(S.other_vp));
     S.frames_active = 0;
     S.resolve_consecutive_fail = 0;
+    S.swap_thread_tag = thread_tag();
+    diag_store(&S.last_wrapper_thread_tag, 0);
+    diag_store(&S.last_other_thread_tag, 0);
+    diag_store(&S.wrapper_calls_total, 0);
+    diag_store(&S.wrapper_calls_inactive, 0);
+    diag_store(&S.wrapper_calls_other_thread, 0);
+    diag_store(&S.wrapper_calls_active, 0);
+    diag_store(&S.ss_active_non_render_thread_draws, 0);
+    diag_store(&S.viewport_non_surface, 0);
+    diag_store(&S.viewport_full_surface, 0);
+    diag_store(&S.viewport_zero_or_negative, 0);
+    diag_store(&S.bind_default, 0); diag_store(&S.bind_nondefault, 0);
+    diag_store(&S.get_viewport_queries, 0); diag_store(&S.get_fbo_queries, 0); diag_store(&S.get_dimension_queries, 0);
+    diag_store(&S.pre_swap_samples, 0); diag_store(&S.pre_swap_fbo_mismatch, 0);
+    diag_store(&S.pre_swap_viewport_mismatch, 0); diag_store(&S.pre_swap_scissor_mismatch, 0);
+    std::memset(S.diag_last_driver_vp, 0, sizeof(S.diag_last_driver_vp));
+    std::memset(S.diag_last_driver_sc, 0, sizeof(S.diag_last_driver_sc));
+    std::memset(S.diag_last_game_vp, 0, sizeof(S.diag_last_game_vp));
+    std::memset(S.diag_last_scaled_vp, 0, sizeof(S.diag_last_scaled_vp));
 
     t_mark = 1;
     g_engaged.store(1, std::memory_order_release);
@@ -1117,9 +1339,14 @@ std::string report_text() {
         const Entry& e = g_entries[i];
         if (!e.name) continue;
         std::string line = std::string("ss_fn_") + (e.name + 2);
-        char buf[200];
-        snprintf(buf, sizeof(buf), "proc_req=%llu dlsym_req=%llu wrapper_calls=%llu table_slots_patched=%u real=%s",
-                 e.req[SRC_PROC], e.req[SRC_DLSYM], e.calls, e.patched, (e.real && *e.real) ? "yes" : "no");
+        char buf[768];
+        snprintf(buf, sizeof(buf), "proc_req=%llu dlsym_req=%llu table_req=%llu before_enabled=%llu/%llu/%llu wrapper_calls=%llu inactive=%llu other_thread=%llu table_slots_patched=%u selected=%s real=%s orig_proc=%s orig_dlsym=%s",
+                 e.req[SRC_PROC], e.req[SRC_DLSYM], e.req[SRC_TABLE],
+                 e.req_before_enabled[SRC_PROC], e.req_before_enabled[SRC_DLSYM], e.req_before_enabled[SRC_TABLE],
+                 e.calls, e.calls_inactive, e.calls_other_thread, e.patched,
+                 __atomic_load_n(&e.last_returned, __ATOMIC_RELAXED) == e.wrapper ? "wrapper" : (__atomic_load_n(&e.last_returned, __ATOMIC_RELAXED) ? "real" : "null"),
+                 (e.real && *e.real) ? "yes" : "no",
+                 hex_ptr_local(e.seen[SRC_PROC]).c_str(), hex_ptr_local(e.seen[SRC_DLSYM]).c_str());
         kv(o, line.c_str(), buf);
     }
     kvu(o, "ss_table_scans", S.table_scans);
@@ -1164,6 +1391,30 @@ std::string report_text() {
     kv(o, "ss_resolve_src", dim(S.resolve_src_w, S.resolve_src_h));
     kv(o, "ss_resolve_dst", dim(S.resolve_dst_w, S.resolve_dst_h));
     kvu(o, "ss_apply_state_errors", S.apply_errors);
+    kvu(o, "ss_diag_wrapper_calls_total", diag_load(&S.wrapper_calls_total));
+    kvu(o, "ss_diag_wrapper_calls_active", diag_load(&S.wrapper_calls_active));
+    kvu(o, "ss_diag_wrapper_calls_inactive", diag_load(&S.wrapper_calls_inactive));
+    kvu(o, "ss_diag_wrapper_calls_other_thread", diag_load(&S.wrapper_calls_other_thread));
+    kvu(o, "ss_diag_draws_other_thread", diag_load(&S.ss_active_non_render_thread_draws));
+    kvu(o, "ss_diag_viewport_full_surface", diag_load(&S.viewport_full_surface));
+    kvu(o, "ss_diag_viewport_non_surface", diag_load(&S.viewport_non_surface));
+    kvu(o, "ss_diag_viewport_zero_or_negative", diag_load(&S.viewport_zero_or_negative));
+    kvu(o, "ss_diag_get_viewport_queries", diag_load(&S.get_viewport_queries));
+    kvu(o, "ss_diag_get_fbo_queries", diag_load(&S.get_fbo_queries));
+    kvu(o, "ss_diag_get_dimension_queries", diag_load(&S.get_dimension_queries));
+    kvu(o, "ss_diag_bind_default", diag_load(&S.bind_default));
+    kvu(o, "ss_diag_bind_nondefault", diag_load(&S.bind_nondefault));
+    kvu(o, "ss_diag_pre_swap_samples", diag_load(&S.pre_swap_samples));
+    kvu(o, "ss_diag_pre_swap_fbo_mismatch", diag_load(&S.pre_swap_fbo_mismatch));
+    kvu(o, "ss_diag_pre_swap_viewport_mismatch", diag_load(&S.pre_swap_viewport_mismatch));
+    kvu(o, "ss_diag_pre_swap_scissor_mismatch", diag_load(&S.pre_swap_scissor_mismatch));
+    kv(o, "ss_diag_swap_thread_tag", hex_ptr_local(reinterpret_cast<void*>(static_cast<uintptr_t>(S.swap_thread_tag))));
+    kv(o, "ss_diag_last_wrapper_thread_tag", hex_ptr_local(reinterpret_cast<void*>(static_cast<uintptr_t>(diag_load(&S.last_wrapper_thread_tag)))));
+    kv(o, "ss_diag_last_other_thread_tag", hex_ptr_local(reinterpret_cast<void*>(static_cast<uintptr_t>(diag_load(&S.last_other_thread_tag)))));
+    kv(o, "ss_diag_last_game_viewport", std::to_string(S.diag_last_game_vp[0]) + "," + std::to_string(S.diag_last_game_vp[1]) + "," + std::to_string(S.diag_last_game_vp[2]) + "," + std::to_string(S.diag_last_game_vp[3]));
+    kv(o, "ss_diag_last_scaled_viewport", std::to_string(S.diag_last_scaled_vp[0]) + "," + std::to_string(S.diag_last_scaled_vp[1]) + "," + std::to_string(S.diag_last_scaled_vp[2]) + "," + std::to_string(S.diag_last_scaled_vp[3]));
+    kv(o, "ss_diag_last_driver_viewport", std::to_string(S.diag_last_driver_vp[0]) + "," + std::to_string(S.diag_last_driver_vp[1]) + "," + std::to_string(S.diag_last_driver_vp[2]) + "," + std::to_string(S.diag_last_driver_vp[3]));
+    kv(o, "ss_diag_last_driver_scissor", std::to_string(S.diag_last_driver_sc[0]) + "," + std::to_string(S.diag_last_driver_sc[1]) + "," + std::to_string(S.diag_last_driver_sc[2]) + "," + std::to_string(S.diag_last_driver_sc[3]));
     return o;
 }
 
@@ -1188,7 +1439,15 @@ void set_options(const Options& options) {
     (void)was_enabled;
 }
 
-void set_report_path(const std::string& path) { S.report_path = path; }
+void set_report_path(const std::string& path) {
+    S.report_path = path;
+    S.diag_path.clear();
+    if (!path.empty()) {
+        const size_t slash = path.find_last_of('/');
+        const std::string dir = slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
+        S.diag_path = dir + "danzku_ss_diag_" + std::to_string(static_cast<int>(getpid())) + ".log";
+    }
+}
 
 void note_hook_install(const char* which, bool ok, const char* detail) {
     S.hook_notes += std::string(which) + "=" + (ok ? "ok" : "fail") + "(" + (detail ? detail : "") + ") ";
@@ -1201,10 +1460,12 @@ void* wrapper_for(const char* name, Source source, void* orig) {
         Entry& e = g_entries[i];
         if (strcmp(name, e.name) != 0) continue;
         __atomic_fetch_add(&e.req[source], 1ULL, __ATOMIC_RELAXED);
+        if (!S.opt.enabled) ++e.req_before_enabled[source];
         if (orig && !e.seen[source]) e.seen[source] = orig;
-        if (!S.opt.enabled || S.state == ST_FAILED) return nullptr;
-        if (!ensure_gl()) return nullptr;
-        if (!e.real || !*e.real) return nullptr;
+        if (!S.opt.enabled || S.state == ST_FAILED) { __atomic_store_n(&e.last_returned, orig, __ATOMIC_RELAXED); return nullptr; }
+        if (!ensure_gl()) { __atomic_store_n(&e.last_returned, orig, __ATOMIC_RELAXED); return nullptr; }
+        if (!e.real || !*e.real) { __atomic_store_n(&e.last_returned, orig, __ATOMIC_RELAXED); return nullptr; }
+        __atomic_store_n(&e.last_returned, e.wrapper, __ATOMIC_RELAXED);
         return e.wrapper;
     }
     return nullptr;
@@ -1227,7 +1488,23 @@ void pre_swap(EGLDisplay dpy, EGLSurface surface) {
     // reached FB 0 through a GLES pointer we did not intercept. Resolving now would overwrite
     // the real frame with stale supersampled content, so skip this frame and fall back if it repeats.
     GLint real_draw = -1;
+    GLint real_read = -1;
+    GLint driver_vp[4] = {0,0,0,0};
+    GLint driver_sc[4] = {0,0,0,0};
     gl.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &real_draw);
+    gl.GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &real_read);
+    gl.GetIntegerv(GL_VIEWPORT, driver_vp);
+    gl.GetIntegerv(GL_SCISSOR_BOX, driver_sc);
+    diag_add(&S.pre_swap_samples);
+    S.diag_last_bind_draw = real_draw;
+    S.diag_last_bind_read = real_read;
+    std::memcpy(S.diag_last_driver_vp, driver_vp, sizeof(driver_vp));
+    std::memcpy(S.diag_last_driver_sc, driver_sc, sizeof(driver_sc));
+    if (real_draw != static_cast<GLint>(S.fbo) || real_read != static_cast<GLint>(S.fbo)) diag_add(&S.pre_swap_fbo_mismatch);
+    if (driver_vp[0] != 0 || driver_vp[1] != 0 || driver_vp[2] != S.ss_w || driver_vp[3] != S.ss_h) diag_add(&S.pre_swap_viewport_mismatch);
+    const GLint expected_sc_w = S.app_sc[2] > 0 ? sc_x(S.app_sc[2]) : S.ss_w;
+    const GLint expected_sc_h = S.app_sc[3] > 0 ? sc_y(S.app_sc[3]) : S.ss_h;
+    if (S.app_draw == 0 && S.app_sc_en && (driver_sc[2] != expected_sc_w || driver_sc[3] != expected_sc_h)) diag_add(&S.pre_swap_scissor_mismatch);
     if (real_draw == 0) {
         ++S.bypass_frames;
         if (++S.bypass_consecutive >= 3) request_fallback("wrappers_bypassed_game_draws_to_real_fb0");
@@ -1245,6 +1522,7 @@ void pre_swap(EGLDisplay dpy, EGLSurface surface) {
 }
 
 void post_swap(EGLDisplay dpy, EGLSurface surface, EGLBoolean swap_result) {
+    if (S.swap_thread_tag == 0) S.swap_thread_tag = thread_tag();
     ++S.swaps;
     if (S.state == ST_ACTIVE) {
         if (!g_engaged.load(std::memory_order_acquire) || eglGetCurrentContext() != S.ctx || swap_result != EGL_TRUE) {
@@ -1271,6 +1549,10 @@ void post_swap(EGLDisplay dpy, EGLSurface surface, EGLBoolean swap_result) {
     if (S.state == ST_OFF && S.opt.enabled) S.state = ST_IDLE;
     if (S.state == ST_IDLE && !S.opt.enabled) S.state = ST_OFF;
     if (S.state == ST_IDLE && S.opt.enabled && swap_result == EGL_TRUE) try_engage(dpy, surface);
+    if (S.opt.logging && (S.swaps == 1 || S.swaps - S.diag_last_dump_swap >= 30)) {
+        S.diag_last_dump_swap = S.swaps;
+        write_diag_snapshot("post_swap");
+    }
     if (S.swaps == 1 || S.swaps - S.last_report_swap >= 120) {
         S.last_report_swap = S.swaps;
         write_report_file();

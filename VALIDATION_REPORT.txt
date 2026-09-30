@@ -1,28 +1,29 @@
-DanzKu Visual Shader V5.2.29 — SS Zoom Fix Validation
+DanzKu Visual Shader V5.3.0 — Additive Reconstruction + True SS 2.0 Foundations
 
-Fix scope:
-- After True Supersampling resolve, explicitly bind GL_DRAW_FRAMEBUFFER=0.
-- After True Supersampling resolve, explicitly bind GL_READ_FRAMEBUFFER=0.
-- Restore viewport to actual EGL surface dimensions before downstream V40 processing.
-- Restore original GL_SCISSOR_TEST enable state before the downstream handoff.
-- Add ss_downstream_handoff_ok / ss_downstream_handoff_fail telemetry.
-- Add source validation guards for the downstream handoff invariant.
-- Bump module + monitor metadata to V5.2.29 / versionCode 529.
+Fix/implementation scope:
+- Rebuilt the V27 fragment shader around one additive current-color chain so visual stages compose instead of replacing one another.
+- Moved AA ahead of detail reconstruction and bounded its contribution.
+- Activated local contrast, highlight/shadow refinement, neural/structure reconstruction, high-end gain, AO luminance, specular detail, reflection-like screen-space sampling, lighting gain, bright-pass effects, texture detail, and anisotropic-like detail as actual pixel operations.
+- Added screen-space temporal confidence improvements, small neighborhood history reprojection, V9 depth-proxy agreement, and V11 color-history clipping.
+- Added native frame-time quality governor exposed as runtime_visual_quality in the report.
+- True SS: context-aware activation, default-FB attachment/sample query virtualization, app-scope pointer-table fallback, and MSAA-aware redirected/resolve FBOs.
+- Hardened attachment-query virtualization to avoid probing the private redirected FBO for default-FB-only state.
+- Monitor APK: device-aware RECOMMENDED profile based on RAM and display resolution; native remains responsible for per-frame adaptation.
+- Version bump to V5.3.0 / versionCode 530.
 
 Automated validation run:
 VALIDATION=PASS
 source=clean
-config_keys=94
+config_keys= 94
 v5_features=advanced_aa,shadow,ao,specular,reflection,lighting,effects
 stale_v32_tokens=0
 stage1_color_texture_masters=PASS
 stage1_bypass_gates=PASS
 
 Build status:
-- Android NDK/CMake build was NOT executed in this container because an Android NDK toolchain is not installed here.
-- The GitHub Actions workflow remains configured to build arm64-v8a with Android API 29 and NDK 27.2.12479018.
+- Android NDK/CMake and Android Gradle builds were not executed in this container because an Android NDK/SDK toolchain is not installed here.
+- GitHub Actions remains configured for arm64-v8a / Android API 29 / NDK 27.2.12479018 and Monitor APK version 5.3.0.
 
-Expected runtime invariant on device:
-- ss_downstream_handoff_ok increases with successful SS resolves.
-- ss_downstream_handoff_fail remains 0.
-- V40's read framebuffer should be 0 at the start of v27_process_frame() after SS resolve.
+Runtime notes:
+- True SS zoom fix remains seeded from the EGL surface dimensions rather than an arbitrary viewport.
+- New SS telemetry fields cover context/thread, attachment/sample virtualization, app-scope table patching, MSAA target selection, and downstream FB0 handoff.

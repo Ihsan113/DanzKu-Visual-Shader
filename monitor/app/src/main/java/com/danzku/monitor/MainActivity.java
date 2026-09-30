@@ -1,6 +1,7 @@
 package com.danzku.monitor;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.os.Bundle;
 import android.os.Handler;
@@ -28,6 +29,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import android.content.SharedPreferences;
 import android.util.Base64;
+import android.util.DisplayMetrics;
 
 public class MainActivity extends Activity {
     static class RenderStats {
@@ -169,21 +171,32 @@ public class MainActivity extends Activity {
     }
 
     void initDefaultStrengths() {
-        defaultStrengths.put("shadow_enhancement", "0.18");
-        defaultStrengths.put("contact_shadow", "0.10");
-        defaultStrengths.put("ao_enhancement", "0.10");
-        defaultStrengths.put("specular_enhancement", "0.10");
-        defaultStrengths.put("reflection_approximation", "0.08");
-        defaultStrengths.put("lighting_enhancement", "0.08");
-        defaultStrengths.put("effect_enhancement", "0.10");
+        defaultStrengths.put("sharpen", "0.34");
+        defaultStrengths.put("clarity", "0.20");
+        defaultStrengths.put("material_detail", "0.28");
+        defaultStrengths.put("local_contrast", "0.20");
+        defaultStrengths.put("highlight_refine", "0.16");
+        defaultStrengths.put("shadow_refine", "0.14");
+        defaultStrengths.put("edge_strength", "0.24");
+        defaultStrengths.put("reconstruction", "1.00");
+        defaultStrengths.put("neural_strength", "0.18");
+        defaultStrengths.put("structure_strength", "0.55");
+        defaultStrengths.put("high_end_strength", "0.78");
+        defaultStrengths.put("shadow_enhancement", "0.28");
+        defaultStrengths.put("contact_shadow", "0.30");
+        defaultStrengths.put("ao_enhancement", "0.28");
+        defaultStrengths.put("specular_enhancement", "0.28");
+        defaultStrengths.put("reflection_approximation", "0.22");
+        defaultStrengths.put("lighting_enhancement", "0.24");
+        defaultStrengths.put("effect_enhancement", "0.28");
         defaultStrengths.put("saturation", "1.25");
         defaultStrengths.put("vibrance", "0.20");
-        defaultStrengths.put("anisotropic_enhancement", "0.00");
+        defaultStrengths.put("anisotropic_enhancement", "4.00");
         defaultStrengths.put("frame_buffer_optimization", "1");
-        defaultStrengths.put("adaptive_texture_enhancement", "0.15");
-        defaultStrengths.put("hdr_enhancement", "0.10");
+        defaultStrengths.put("adaptive_texture_enhancement", "0.28");
+        defaultStrengths.put("hdr_enhancement", "0.22");
         defaultStrengths.put("visual_proof", "1");
-        defaultStrengths.put("visual_proof_bypass", "1");
+        defaultStrengths.put("visual_proof_bypass", "0");
         defaultStrengths.put("advanced_aa", "1");
         defaultStrengths.put("enabled", "1");
         defaultStrengths.put("logging", "1");
@@ -783,7 +796,7 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(8, 8, 8, 8);
 
-        String[] names = {"NATURAL", "VIVID", "CINEMATIC"};
+        String[] names = {"RECOMMENDED", "NATURAL", "VIVID", "CINEMATIC"};
         for (String name : names) {
             Button b = new Button(this);
         styleActionButton(b);
@@ -810,7 +823,7 @@ public class MainActivity extends Activity {
         profileStatusLabel.setPadding(dp(12), dp(9), dp(12), dp(9));
         addRootView(profileStatusLabel);
 
-        TextView hint = tv("Rekomendasi cepat: Natural = seimbang • Vivid = warna/detail • Cinematic = kontras/film");
+        TextView hint = tv("RECOMMENDED menyesuaikan SS + neural detail dengan resolusi dan RAM perangkat. Profil lain tetap manual.");
         hint.setTextSize(12);
         addRootView(hint);
     }
@@ -842,7 +855,69 @@ public class MainActivity extends Activity {
         values.put("v11_detail_preservation", "1");
         values.put("v12_motion_handling", "1");
 
-        if ("NATURAL".equals(name)) {
+        if ("RECOMMENDED".equals(name)) {
+            ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+            ActivityManager am = (ActivityManager)getSystemService(ACTIVITY_SERVICE);
+            if (am != null) am.getMemoryInfo(mi);
+            DisplayMetrics dm = getResources().getDisplayMetrics();
+            long pixels = Math.max(1L, (long)dm.widthPixels * (long)dm.heightPixels);
+            long ramGb = Math.max(1L, mi.totalMem / (1024L * 1024L * 1024L));
+
+            // The APK only selects a safe baseline. Native V5.3.0 does the per-frame
+            // temporal/quality adaptation from its own runtime measurements.
+            float ssScale;
+            if (ramGb >= 8L && pixels <= 5_500_000L) ssScale = 1.35f;
+            else if (ramGb >= 6L && pixels <= 4_500_000L) ssScale = 1.30f;
+            else if (ramGb >= 4L && pixels <= 3_000_000L) ssScale = 1.22f;
+            else ssScale = 1.15f;
+            long maxPixels = Math.min(5_500_000L, Math.max(2_400_000L, (long)(pixels * ssScale * ssScale)));
+
+            values.put("supersampling_scale", String.format(Locale.US, "%.2f", ssScale));
+            values.put("supersampling_max_pixels", Long.toString(maxPixels));
+            values.put("sharpen", "0.34");
+            values.put("clarity", "0.20");
+            values.put("material_detail", "0.28");
+            values.put("local_contrast", "0.20");
+            values.put("highlight_refine", "0.16");
+            values.put("shadow_refine", "0.14");
+            values.put("edge_strength", "0.24");
+            values.put("reconstruction", "1.00");
+            values.put("neural_style_reconstruction", "1");
+            values.put("neural_strength", "0.18");
+            values.put("structure_strength", "0.55");
+            values.put("high_end_reconstruction", "1");
+            values.put("high_end_strength", "0.78");
+            values.put("advanced_aa", "1");
+            values.put("aa_strength", "0.12");
+            values.put("shadow_enhancement", "0.28");
+            values.put("shadow_stability", "0.45");
+            values.put("contact_shadow", "0.30");
+            values.put("ao_enhancement", "0.28");
+            values.put("specular_enhancement", "0.28");
+            values.put("reflection_approximation", "0.22");
+            values.put("lighting_enhancement", "0.24");
+            values.put("effect_enhancement", "0.28");
+            values.put("saturation", "1.20");
+            values.put("vibrance", "0.20");
+            values.put("anisotropic_enhancement", "4.0");
+            values.put("adaptive_texture_enhancement", "0.28");
+            values.put("hdr_enhancement", "0.22");
+            values.put("ai_reconstruction_v6", "1");
+            values.put("ai_motion_strength", "0.55");
+            values.put("ai_reactive_strength", "0.35");
+            values.put("ai_ghost_protection", "0.60");
+            values.put("ai_subpixel_strength", "0.22");
+            values.put("ai_frequency_detail", "0.30");
+            values.put("ai_edge_sharpen", "0.24");
+            values.put("ai_luma_chroma", "0.18");
+            values.put("ai_highlight_reconstruction", "0.14");
+            values.put("ai_shadow_recovery", "0.16");
+            values.put("ai_material_reconstruction", "0.28");
+            values.put("ai_dynamic_quality", "1");
+            values.put("ai_detail_budget", ramGb >= 6L ? "0.82" : "0.72");
+            values.put("ai_motion_complexity", "0.55");
+            values.put("temporal_strength", "0.22");
+        } else if ("NATURAL".equals(name)) {
             values.put("sharpen", "0.14");
             values.put("clarity", "0.06");
             values.put("temporal_strength", "0.18");
@@ -1574,7 +1649,7 @@ public class MainActivity extends Activity {
 
     String buildStatusText() {
         String rootCheck = su("id");
-        if (!rootCheck.startsWith("uid=0")) return "DANZKU MONITOR V5.2.29\nROOT: FAILED\n" + rootCheck;
+        if (!rootCheck.startsWith("uid=0")) return "DANZKU MONITOR V5.3.0\nROOT: FAILED\n" + rootCheck;
         RuntimeState st = readRuntime();
         String config = configText();
         HashSet<String> targets = readTargetPackages();
@@ -1597,7 +1672,7 @@ public class MainActivity extends Activity {
         }
 
         if (!st.ready) {
-            final String text = "DANZKU MONITOR V5.2.29\n" +
+            final String text = "DANZKU MONITOR V5.3.0\n" +
                     "ROOT: OK\n" +
                     "TARGET: " + targetSummary + "\n" +
                     "ACTIVE APP: " + activeSummary + "\n" +
@@ -1612,7 +1687,7 @@ public class MainActivity extends Activity {
             return text;
         }
 
-        StringBuilder sb = new StringBuilder("DANZKU MONITOR V5.2.29\n");
+        StringBuilder sb = new StringBuilder("DANZKU MONITOR V5.3.0\n");
         sb.append("ROOT: OK\n");
         sb.append("TARGET: ").append(targetSummary).append("\n");
         sb.append("ACTIVE APP: ").append(activeSummary).append("\n");
@@ -1829,16 +1904,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    void requestOverlayPermission() {
-        try {
-            Intent i=new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:"+getPackageName()));
-            startActivity(i);
-        } catch(Exception e) {
-            startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION));
-        }
-    }
-
     Button overlayButton(String text) {
         Button b = new Button(this);
         b.setAllCaps(false);
@@ -1952,7 +2017,7 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        String[] names = {"NATURAL", "VIVID", "CINEMATIC"};
+        String[] names = {"RECOMMENDED", "NATURAL", "VIVID", "CINEMATIC"};
         for (String name : names) {
             Button b = overlayButton(name);
             b.setTextSize(10);

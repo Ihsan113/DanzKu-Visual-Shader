@@ -56,6 +56,9 @@ BUILD-FIX NOTE: Removed glGetTexLevelParameteriv because Android GLES headers/AP
 ### V5.2.29 True SS/V40 framebuffer handoff fix
 After True Supersampling resolves the supersampled render target into the real EGL default framebuffer, the downstream V40 pass is explicitly handed FB 0 for both READ and DRAW, with the viewport reset to the actual EGL surface size. This prevents a supersampled source FBO from being re-read as a partial source and stretched back to the display, the mechanism that produced scale-proportional zoom.
 
+### V5.3.0 native reconstruction core
+V5.3.0 changes the image pipeline from competing mix/replacement branches to an additive `current` color chain. The native shader now keeps spatial detail, screen-space AI heuristics, temporal history, and visual enhancement stages composable. The release also adds context-aware True SS activation, MSAA-aware redirected targets, FB0 query virtualization, a non-Unity app-scope pointer-table fallback, and a small native frame-time quality governor. The Monitor APK's `RECOMMENDED` profile only chooses a baseline; per-frame adaptation stays native.
+
 ### V5.2.26 viewport handling
 V5.2.26 addresses the verified V5.2.16 skip condition without replacing the proven Direct GOT eglSwapBuffers hook. Exact viewport dimensions continue through the original path. A smaller viewport is processed only under strict geometry/surface/aspect checks; rejected viewports remain skipped.
 

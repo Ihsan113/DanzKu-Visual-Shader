@@ -95,7 +95,7 @@ for token in ai_report_tokens:
     if token not in src:
         errors.append(f'missing V6 AI runtime report token: {token}')
 
-# V5.2.29 diagnostic requirements.
+# V5.3.0 diagnostic requirements.
 # True Supersampling downstream handoff invariant: after resolving SS into the real
 # default framebuffer, the downstream V40 stage must read FB 0 at surface resolution.
 handoff_tokens = [
@@ -127,21 +127,21 @@ diagnostic_tokens = [
 ]
 for token in diagnostic_tokens:
     if token not in src:
-        errors.append(f'missing V5.2.29 diagnostic token: {token}')
+        errors.append(f'missing V5.3.0 diagnostic token: {token}')
 
 monitor_gradle = (root / 'monitor/app/build.gradle').read_text()
 monitor_java = (root / 'monitor/app/src/main/java/com/danzku/monitor/MainActivity.java').read_text()
 workflow_monitor = (root / 'monitor/.github/workflows/build-apk.yml').read_text()
 workflow_root = (root / '.github/workflows/build.yml').read_text()
 
-if 'versionName "5.2.29"' not in monitor_gradle or 'versionCode 529' not in monitor_gradle:
-    errors.append('monitor Gradle metadata is not 5.2.29/versionCode 529')
-if 'V5.2.29' not in monitor_java:
-    errors.append('MainActivity version label is not V5.2.29')
-if 'V5.2.29' not in workflow_root or 'V5.2.29' not in workflow_monitor:
-    errors.append('workflow version label is not V5.2.29')
-if 'DanzKu-Monitor-V5.2.29-debug' not in workflow_root or 'DanzKu-Monitor-V5.2.29-debug' not in workflow_monitor:
-    errors.append('workflow artifact name is not V5.2.29')
+if 'versionName "5.3.0"' not in monitor_gradle or 'versionCode 530' not in monitor_gradle:
+    errors.append('monitor Gradle metadata is not 5.3.0/versionCode 530')
+if 'V5.3.0' not in monitor_java:
+    errors.append('MainActivity version label is not V5.3.0')
+if 'V5.3.0' not in workflow_root or 'V5.3.0' not in workflow_monitor:
+    errors.append('workflow version label is not V5.3.0')
+if 'DanzKu-Monitor-V5.3.0-debug' not in workflow_root or 'DanzKu-Monitor-V5.3.0-debug' not in workflow_monitor:
+    errors.append('workflow artifact name is not V5.3.0')
 
 
 
@@ -167,15 +167,48 @@ if 'REPORT_DIR = "/data/user/0/com.mobile.legends/files"' in monitor_java:
 if '<queries>' not in (root / 'monitor/app/src/main/AndroidManifest.xml').read_text():
     errors.append('monitor package visibility queries missing')
 
+
+# Every declared GLSL uniform must also occur in the shader body, otherwise
+# glGetUniformLocation() may return -1 and a UI feature can silently become a no-op.
+shader_start = src.find('static const char* fs =')
+shader_end = src.find('g_v27_shader_log.clear()', shader_start)
+if shader_start >= 0 and shader_end > shader_start:
+    shader_block = src[shader_start:shader_end]
+    declared_uniforms = re.findall(r'"uniform float ([A-Za-z0-9_]+);"', shader_block)
+    for u in declared_uniforms:
+        if shader_block.count(u) < 2:
+            # declaration + shader-body use + lookup/upload wiring are expected;
+            # a lower count is a strong signal of an optimized-out/no-op control.
+            errors.append(f'GLSL uniform appears unused or under-wired: {u}')
+else:
+    errors.append('could not isolate V27 fragment shader block')
+
+# V5.3.0 additive reconstruction / SS2 compatibility invariants.
+v530_tokens = [
+    'vec3 cur=c;', 'cur+=fineDetail', 'cur+=aiDelta',
+    'ss_msaa_target', 'GetFramebufferAttachmentParameteriv',
+    'RenderbufferStorageMultisample', 'ss_default_samples',
+    'app_scope', 'wrappers_bypassed_game_draws_to_real_fb0', 'uRuntimeQuality', 'g_runtime_quality', 'runtime_visual_quality'
+]
+for token in v530_tokens:
+    if token not in src and token not in ss_src:
+        errors.append(f'missing V5.3.0 invariant token: {token}')
+
 # Safety-scope implementation checks: reject concrete system-tuning APIs/paths.
 for forbidden in ['sched_setaffinity', 'setpriority(', '/sys/class/devfreq', '/sys/devices/system/cpu', 'cpufreq', 'devfreq', 'system(', 'property_set(']:
     if forbidden.lower() in src.lower():
         errors.append(f'forbidden performance/system implementation token present: {forbidden}')
 
-if 'version=5.2.29' not in prop or 'versionCode=529' not in prop:
-    errors.append('module.prop is not V5.2.29/versionCode 529')
+if 'version=5.3.0' not in prop or 'versionCode=530' not in prop:
+    errors.append('module.prop is not V5.3.0/versionCode 530')
 if 'android-29' not in workflow or 'arm64-v8a' not in workflow:
     errors.append('workflow target ABI/API mismatch')
+
+if 'inline bool ss_active() { return t_mark' in ss_src:
+    errors.append('SS activation still depends on thread-local t_mark')
+attachment_fn = ss_src[ss_src.find('w_GetFramebufferAttachmentParameteriv'):ss_src.find('w_Viewport')]
+if 'diag_add(&S.wrapper_calls_active);\n    gl.GetFramebufferAttachmentParameteriv(target, attachment, pname, params);' in attachment_fn:
+    errors.append('redirected default-FB attachment wrapper still queries private FBO')
 
 if errors:
     print('VALIDATION=FAIL')

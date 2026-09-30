@@ -1,4 +1,4 @@
-name: Build DanzKu Monitor APK V5.2.29 QUICK OVERLAY
+name: Build DanzKu Monitor APK V5.3.0 QUICK OVERLAY
 
 on:
   workflow_dispatch:
@@ -44,5 +44,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: DanzKu-Monitor-V5.2.29-debug
+          name: DanzKu-Monitor-V5.3.0-debug
           path: monitor/app/build/outputs/apk/debug/app-debug.apk

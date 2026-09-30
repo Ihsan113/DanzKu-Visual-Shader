@@ -10,8 +10,8 @@ android {
         applicationId 'com.danzku.monitor'
         minSdk 29
         targetSdk 35
-        versionCode 529
-        versionName "5.2.29"
+        versionCode 530
+        versionName "5.3.0"
     }
 }
 

@@ -1,3 +1,17 @@
+# DanzKu Visual Shader V5.3.0 — DLSS-like Additive Reconstruction + True SS 2.0 Foundations
+
+- Rebuilt the native post-process compositing path around one accumulated `current` color so Sharpen, Clarity, Material, Edge, Neural/AI, Shadow, AO, Specular, Reflection, Lighting, Effects, Texture and Color stages can be enabled together without the AI stage replacing earlier work.
+- Moved the lightweight AA contribution ahead of detail reconstruction and bounded it so it no longer washes out the detail stages.
+- Made several previously tiny or detail-only controls affect the intended signal directly: local contrast, highlight/shadow refinement, AO luminance, specular bright-detail, reflection-like screen-space sampling, lighting gain, and bright-pass effects.
+- Added screen-space temporal improvements: confidence thresholds are active, V9 depth-proxy confidence is used, V11 color clipping participates in history clamping, and a small 5-tap history selection is used as a motion-reprojection proxy when local motion is detected. This remains a heuristic, not true engine motion vectors or neural inference.
+- Added a native runtime quality governor driven by measured EGL frame time. Under frame-time pressure it reduces expensive visual detail/temporal work while keeping the APK Recommendation profile as the high-level baseline selector.
+- True Supersampling foundations: activation is context-aware instead of relying on a thread-local swap-thread marker, default-framebuffer attachment/sample queries are virtualized, app-scope pointer-table scanning is supported for non-Unity renderers, and multisampled default surfaces are represented with a multisample game FBO plus a separate single-sample resolve FBO.
+- Hardened default-framebuffer attachment virtualization so the wrapper synthesizes virtual FB0 state instead of querying the private redirected FBO and potentially generating GL errors.
+- Monitor APK: added a device-aware `RECOMMENDED` profile that chooses a conservative SS scale/max-pixel baseline from RAM and display resolution; native code continues per-frame quality adaptation.
+- Version bumped to module/monitor V5.3.0 (versionCode 530).
+
+> Goal: move DanzKu toward a DLSS-like temporal reconstruction pipeline while staying generic to OpenGL games. It is not an implementation of NVIDIA DLSS 5 and does not have engine-owned semantic buffers unless a target exposes them.
+
 
 ## V5.2.29 — APK Quick Overlay + SS UI Sync
 - Fixed APK synchronization for `supersampling_scale` and `supersampling_max_pixels`; sliders now read the live config during normal refresh.

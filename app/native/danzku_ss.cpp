@@ -34,6 +34,10 @@
 #include <string>
 #include <vector>
 
+#ifndef GL_FRAMEBUFFER_DEFAULT
+#define GL_FRAMEBUFFER_DEFAULT 0x8218
+#endif
+
 namespace dz_ss {
 namespace {
 
@@ -49,6 +53,7 @@ namespace {
     X(Disable, void, (GLenum)) \
     X(ColorMask, void, (GLboolean, GLboolean, GLboolean, GLboolean)) \
     X(BindFramebuffer, void, (GLenum, GLuint)) \
+    X(GetFramebufferAttachmentParameteriv, void, (GLenum, GLenum, GLenum, GLint*)) \
     X(Viewport, void, (GLint, GLint, GLsizei, GLsizei)) \
     X(Scissor, void, (GLint, GLint, GLsizei, GLsizei)) \
     X(BlitFramebuffer, void, (GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum)) \
@@ -63,6 +68,7 @@ namespace {
     X(DeleteRenderbuffers, void, (GLsizei, const GLuint*)) \
     X(BindRenderbuffer, void, (GLenum, GLuint)) \
     X(RenderbufferStorage, void, (GLenum, GLenum, GLsizei, GLsizei)) \
+    X(RenderbufferStorageMultisample, void, (GLenum, GLsizei, GLenum, GLsizei, GLsizei)) \
     X(FramebufferTexture2D, void, (GLenum, GLenum, GLenum, GLuint, GLint)) \
     X(FramebufferRenderbuffer, void, (GLenum, GLenum, GLenum, GLuint)) \
     X(CheckFramebufferStatus, GLenum, (GLenum)) \
@@ -164,7 +170,7 @@ bool ensure_gl() {
 // Wrapper table
 // ---------------------------------------------------------------------------
 enum EntryId {
-    E_BindFramebuffer, E_Viewport, E_Scissor, E_BlitFramebuffer,
+    E_BindFramebuffer, E_GetFramebufferAttachmentParameteriv, E_Viewport, E_Scissor, E_BlitFramebuffer,
     E_InvalidateFramebuffer, E_InvalidateSubFramebuffer, E_DiscardFramebufferEXT,
     E_DrawBuffers, E_ReadBuffer, E_GetIntegerv, E_ReadPixels,
     E_CopyTexImage2D, E_CopyTexSubImage2D, E_CopyTexSubImage3D,
@@ -215,7 +221,7 @@ struct Engine {
     unsigned ctx_lost_events = 0;
 
     // GL objects (valid only while ctx == the creating context)
-    GLuint fbo = 0, color = 0, ds = 0, vao = 0, prog = 0;
+    GLuint fbo = 0, resolve_fbo = 0, color = 0, ms_color = 0, ds = 0, vao = 0, prog = 0;
     GLint u_tex = -1, u_off = -1;
     bool has_depth = false, has_stencil = false;
     const char* ds_name = "none";
@@ -229,6 +235,8 @@ struct Engine {
     int surf_w = 0, surf_h = 0, ss_w = 0, ss_h = 0;
     float sx = 1.0f, sy = 1.0f, scale_eff = 1.0f;
     bool scale_clamped = false;
+    GLint default_samples = 0, default_sample_buffers = 0, default_depth_bits = 0, default_stencil_bits = 0, ss_samples = 0;
+    bool msaa_target = false;
 
     // Game-visible state
     GLuint app_draw = 0, app_read = 0;
@@ -249,6 +257,8 @@ struct Engine {
     unsigned long long blits_redirected = 0, blit_depth_stripped = 0, blit_errors = 0;
     unsigned long long unsup_readpixels = 0, unsup_copytex = 0;
     unsigned long long invalidate_translated = 0;
+    unsigned long long attachment_queries_virtualized = 0;
+    unsigned long long sample_queries_virtualized = 0;
 
     unsigned long long swaps = 0, frames_active = 0;
     unsigned long long resolve_ok = 0, resolve_fail = 0, resolve_consecutive_fail = 0;
@@ -291,6 +301,8 @@ struct Engine {
     unsigned table_scans = 0;
     unsigned table_patched_total = 0;
     unsigned table_ambiguous = 0;
+    unsigned table_app_objects = 0;
+    unsigned table_app_segments = 0;
     unsigned long long last_scan_frame = 0;
     std::string hook_notes;
     unsigned long long last_report_swap = 0;
@@ -299,7 +311,11 @@ Engine S;
 std::atomic<int> g_engaged{0};
 thread_local int t_mark = 0;
 
-inline bool ss_active() { return t_mark != 0 && g_engaged.load(std::memory_order_relaxed) != 0; }
+inline bool ss_active() {
+    if (g_engaged.load(std::memory_order_acquire) == 0) return false;
+    const EGLContext current = eglGetCurrentContext();
+    return current != EGL_NO_CONTEXT && current == S.ctx;
+}
 
 inline unsigned long long thread_tag() {
     // pthread_t is an implementation-defined scalar on Android/bionic.
@@ -455,6 +471,57 @@ void GL_APIENTRY w_BindFramebuffer(GLenum target, GLuint fb) {
     gl.BindFramebuffer(target, app ? app : S.fbo);
     const bool now_redirect = (S.app_draw == 0);
     if (now_redirect != prev_redirect) apply_viewport_scissor(now_redirect);
+}
+
+void GL_APIENTRY w_GetFramebufferAttachmentParameteriv(GLenum target, GLenum attachment, GLenum pname, GLint* params) {
+    count_call(E_GetFramebufferAttachmentParameteriv);
+    diag_add(&S.wrapper_calls_total);
+    diag_store(&S.last_wrapper_thread_tag, thread_tag());
+    if (!ss_active() || !params || !target_redirected(target)) {
+        gl.GetFramebufferAttachmentParameteriv(target, attachment, pname, params);
+        return;
+    }
+    diag_add(&S.wrapper_calls_active);
+    if (!params) return;
+    ++S.attachment_queries_virtualized;
+    // Do not query the private redirected FBO for virtual default-framebuffer
+    // attachment state. Doing so can itself generate GL_INVALID_OPERATION for
+    // attachment pnames that only make sense for a default framebuffer. Synthesize
+    // the values the game would have observed on EGL FB 0 instead.
+    switch (pname) {
+        case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE:
+            // An EGL default framebuffer attachment is not represented by a user FBO object.
+            *params = GL_FRAMEBUFFER_DEFAULT;
+            break;
+        case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME:
+            *params = 0;
+            break;
+        case GL_FRAMEBUFFER_ATTACHMENT_SAMPLES:
+            *params = S.default_samples;
+            ++S.sample_queries_virtualized;
+            break;
+#ifdef GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_SAMPLES
+        case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_SAMPLES:
+            *params = 0;
+            ++S.sample_queries_virtualized;
+            break;
+#endif
+        case GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE:
+        case GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE:
+        case GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE:
+        case GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE:
+            *params = 8;
+            break;
+        case GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE:
+            *params = S.default_depth_bits;
+            break;
+        case GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE:
+            *params = S.default_stencil_bits;
+            break;
+        default:
+            *params = 0;
+            break;
+    }
 }
 
 void GL_APIENTRY w_Viewport(GLint x, GLint y, GLsizei w, GLsizei h) {
@@ -626,6 +693,12 @@ void GL_APIENTRY w_GetIntegerv(GLenum pname, GLint* data) {
         case GL_READ_FRAMEBUFFER_BINDING:
             if (static_cast<GLuint>(*data) == S.fbo) *data = 0;
             break;
+        case GL_SAMPLES:
+            if (S.app_draw == 0 || S.app_read == 0) { *data = S.default_samples; ++S.sample_queries_virtualized; }
+            break;
+        case GL_SAMPLE_BUFFERS:
+            if (S.app_draw == 0 || S.app_read == 0) { *data = S.default_sample_buffers; ++S.sample_queries_virtualized; }
+            break;
         case GL_VIEWPORT:
             if (S.app_draw == 0) std::memcpy(data, S.app_vp, sizeof(S.app_vp));
             break;
@@ -700,6 +773,7 @@ void init_entries() {
     g_entries[id].wrapper = reinterpret_cast<void*>(fn); \
     g_entries[id].real = reinterpret_cast<void**>(&gl.nm);
     ENTRY(E_BindFramebuffer, BindFramebuffer, w_BindFramebuffer)
+    ENTRY(E_GetFramebufferAttachmentParameteriv, GetFramebufferAttachmentParameteriv, w_GetFramebufferAttachmentParameteriv)
     ENTRY(E_Viewport, Viewport, w_Viewport)
     ENTRY(E_Scissor, Scissor, w_Scissor)
     ENTRY(E_BlitFramebuffer, BlitFramebuffer, w_BlitFramebuffer)
@@ -762,6 +836,7 @@ struct Candidate { uintptr_t addr; int entry; };
 
 struct ScanCtx {
     const char* lib;
+    bool app_scope;
     std::vector<Candidate>* cands;
     uintptr_t cmin, cmax;
     std::vector<MapRange> maps;
@@ -776,7 +851,13 @@ int scan_callback(struct dl_phdr_info* info, size_t, void* opaque) {
     if (!path || !*path) return 0;
     const char* slash = strrchr(path, '/');
     const char* base = slash ? slash + 1 : path;
-    if (strcmp(base, ctx->lib) != 0) return 0;
+    if (ctx->app_scope) {
+        const bool is_app = strstr(path, "/data/app/") || strstr(path, "/data/user/") ||
+                            strstr(path, "/data/data/") || strstr(path, "/mnt/expand/");
+        if (!is_app) return 0;
+    } else if (!ctx->lib || strcmp(base, ctx->lib) != 0) {
+        return 0;
+    }
     ctx->lib_found = true;
     for (size_t i = 0; i < info->dlpi_phnum; ++i) {
         const ElfW(Phdr)& ph = info->dlpi_phdr[i];
@@ -846,13 +927,16 @@ void patch_tables() {
     }
     if (unique.empty()) return;
     ScanCtx ctx{};
-    ctx.lib = "libunity.so";
+    ctx.lib = nullptr;
+    ctx.app_scope = true;
     ctx.cands = &unique;
     ctx.cmin = unique.front().addr;
     ctx.cmax = unique.back().addr;
     ctx.maps = read_maps();
     dl_iterate_phdr(scan_callback, &ctx);
     S.table_patched_total += ctx.patched;
+    S.table_app_objects += ctx.lib_found ? 1u : 0u;
+    S.table_app_segments += ctx.segments;
 }
 
 // ---------------------------------------------------------------------------
@@ -931,12 +1015,16 @@ void build_resolve_program() {
 void release_gl_objects(bool ctx_valid) {
     if (ctx_valid && gl.DeleteFramebuffers) {
         if (S.fbo) gl.DeleteFramebuffers(1, &S.fbo);
+        if (S.resolve_fbo && S.resolve_fbo != S.fbo) gl.DeleteFramebuffers(1, &S.resolve_fbo);
         if (S.color) gl.DeleteTextures(1, &S.color);
+        if (S.ms_color) gl.DeleteRenderbuffers(1, &S.ms_color);
         if (S.ds) gl.DeleteRenderbuffers(1, &S.ds);
         if (S.vao) gl.DeleteVertexArrays(1, &S.vao);
         if (S.prog) gl.DeleteProgram(S.prog);
     }
-    S.fbo = S.color = S.ds = S.vao = S.prog = 0;
+    S.fbo = S.resolve_fbo = S.color = S.ms_color = S.ds = S.vao = S.prog = 0;
+    S.msaa_target = false;
+    S.ss_samples = 0;
     S.resolve_shader = false;
 }
 
@@ -950,10 +1038,29 @@ bool create_resources(int w, int h, std::string& why) {
     GLint depth_bits = 0, stencil_bits = 0;
     gl.GetIntegerv(GL_DEPTH_BITS, &depth_bits);
     gl.GetIntegerv(GL_STENCIL_BITS, &stencil_bits);
+    GLint max_samples = 0;
+#ifdef GL_MAX_SAMPLES
+    gl.GetIntegerv(GL_MAX_SAMPLES, &max_samples);
+#endif
     drain_errors();
 
+    S.default_depth_bits = depth_bits;
+    S.default_stencil_bits = stencil_bits;
     S.has_depth = depth_bits > 0;
     S.has_stencil = stencil_bits > 0;
+    const bool requested_msaa = S.default_sample_buffers > 0 && S.default_samples > 1;
+    if (requested_msaa) {
+        if (!gl.RenderbufferStorageMultisample || max_samples <= 0 || S.default_samples > max_samples) {
+            why = "msaa_target_creation_unsupported";
+            return false;
+        }
+        S.msaa_target = true;
+        S.ss_samples = S.default_samples;
+    } else {
+        S.msaa_target = false;
+        S.ss_samples = 0;
+    }
+
     GLenum ds_fmt = 0;
     GLenum ds_attach = 0;
     if (S.has_depth && S.has_stencil) { ds_fmt = GL_DEPTH24_STENCIL8; ds_attach = GL_DEPTH_STENCIL_ATTACHMENT; S.ds_name = "DEPTH24_STENCIL8"; }
@@ -964,6 +1071,8 @@ bool create_resources(int w, int h, std::string& why) {
     bool ok = true;
     GLenum err = GL_NO_ERROR;
 
+    // Single-sample texture stores the color that both the shader resolve and
+    // the downstream DanzKu reconstruction can sample deterministically.
     gl.GenTextures(1, &S.color);
     gl.BindTexture(GL_TEXTURE_2D, S.color);
     gl.TexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, w, h);
@@ -977,20 +1086,45 @@ bool create_resources(int w, int h, std::string& why) {
     if (ok && ds_fmt) {
         gl.GenRenderbuffers(1, &S.ds);
         gl.BindRenderbuffer(GL_RENDERBUFFER, S.ds);
-        gl.RenderbufferStorage(GL_RENDERBUFFER, ds_fmt, w, h);
+        if (S.msaa_target) gl.RenderbufferStorageMultisample(GL_RENDERBUFFER, S.ss_samples, ds_fmt, w, h);
+        else gl.RenderbufferStorage(GL_RENDERBUFFER, ds_fmt, w, h);
         err = gl.GetError();
         if (err != GL_NO_ERROR) { ok = false; why = "depth_stencil_alloc_failed"; S.create_gl_error = err; }
     }
+
     if (ok) {
         gl.GenFramebuffers(1, &S.fbo);
         gl.BindFramebuffer(GL_FRAMEBUFFER, S.fbo);
-        gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, S.color, 0);
+        if (S.msaa_target) {
+            gl.GenRenderbuffers(1, &S.ms_color);
+            gl.BindRenderbuffer(GL_RENDERBUFFER, S.ms_color);
+            gl.RenderbufferStorageMultisample(GL_RENDERBUFFER, S.ss_samples, GL_RGBA8, w, h);
+            gl.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, S.ms_color);
+        } else {
+            gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, S.color, 0);
+        }
         if (ds_fmt) gl.FramebufferRenderbuffer(GL_FRAMEBUFFER, ds_attach, GL_RENDERBUFFER, S.ds);
         S.fbo_status = gl.CheckFramebufferStatus(GL_FRAMEBUFFER);
         err = gl.GetError();
         if (S.fbo_status != GL_FRAMEBUFFER_COMPLETE) { ok = false; why = "framebuffer_incomplete"; S.create_gl_error = err; }
         else if (err != GL_NO_ERROR) { ok = false; why = "framebuffer_setup_gl_error"; S.create_gl_error = err; }
     }
+
+    if (ok && S.msaa_target) {
+        gl.GenFramebuffers(1, &S.resolve_fbo);
+        gl.BindFramebuffer(GL_FRAMEBUFFER, S.resolve_fbo);
+        gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, S.color, 0);
+        const GLenum status = gl.CheckFramebufferStatus(GL_FRAMEBUFFER);
+        err = gl.GetError();
+        if (status != GL_FRAMEBUFFER_COMPLETE || err != GL_NO_ERROR) {
+            ok = false;
+            why = "msaa_resolve_framebuffer_incomplete";
+            S.create_gl_error = err;
+        }
+    } else if (ok) {
+        S.resolve_fbo = S.fbo;
+    }
+
     if (ok) {
         gl.GenVertexArrays(1, &S.vao);
         build_resolve_program();
@@ -1058,8 +1192,27 @@ bool resolve_to_default(int sw, int sh) {
     S.app_sc_en = st.scissor != 0;    // game's scissor-test enable state
     drain_errors();
 
+    // If the original default framebuffer is multisampled, preserve that sampling
+    // contract in the redirected game FBO and explicitly resolve it to the single-
+    // sample texture before running the quality resolve shader.
+    if (S.msaa_target) {
+        gl.BindFramebuffer(GL_READ_FRAMEBUFFER, S.fbo);
+        gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, S.resolve_fbo);
+        gl.Viewport(0, 0, S.ss_w, S.ss_h);
+        gl.BlitFramebuffer(0, 0, S.ss_w, S.ss_h,
+                           0, 0, S.ss_w, S.ss_h,
+                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        const GLenum msaa_err = gl.GetError();
+        if (msaa_err != GL_NO_ERROR) {
+            S.resolve_gl_error = msaa_err;
+            restore_state(st);
+            drain_errors();
+            return false;
+        }
+    }
+
     gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, S.fbo);
+    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, S.resolve_fbo);
     gl.Viewport(0, 0, sw, sh);
     gl.Disable(GL_SCISSOR_TEST);
     gl.Disable(GL_BLEND); gl.Disable(GL_DEPTH_TEST); gl.Disable(GL_CULL_FACE);
@@ -1234,6 +1387,14 @@ void try_engage(EGLDisplay dpy, EGLSurface surface) {
     GLint max_tex = 0, max_rb = 0;
     gl.GetIntegerv(GL_MAX_TEXTURE_SIZE, &max_tex);
     gl.GetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &max_rb);
+    S.default_samples = 0;
+    S.default_sample_buffers = 0;
+    S.default_depth_bits = 0;
+    S.default_stencil_bits = 0;
+    gl.GetIntegerv(GL_SAMPLES, &S.default_samples);
+    gl.GetIntegerv(GL_SAMPLE_BUFFERS, &S.default_sample_buffers);
+    gl.GetIntegerv(GL_DEPTH_BITS, &S.default_depth_bits);
+    gl.GetIntegerv(GL_STENCIL_BITS, &S.default_stencil_bits);
     float scale = std::min(std::max(S.opt.scale, 1.0f), 2.0f);
     const float wanted = scale;
     long long budget = S.opt.max_pixels > 0 ? S.opt.max_pixels : 4200000;
@@ -1388,6 +1549,13 @@ std::string report_text() {
     kv(o, "ss_game_viewport_last", dim(S.last_app_vp[2], S.last_app_vp[3]));
     kv(o, "ss_real_viewport_last", dim(S.last_real_vp[2], S.last_real_vp[3]));
     kv(o, "ss_fbo_created", S.fbo ? "YES" : "NO");
+    kv(o, "ss_resolve_fbo_created", S.resolve_fbo ? "YES" : "NO");
+    kv(o, "ss_msaa_target", S.msaa_target ? "YES" : "NO");
+    kv(o, "ss_default_samples", std::to_string(S.default_samples));
+    kv(o, "ss_default_sample_buffers", std::to_string(S.default_sample_buffers));
+    kv(o, "ss_default_depth_bits", std::to_string(S.default_depth_bits));
+    kv(o, "ss_default_stencil_bits", std::to_string(S.default_stencil_bits));
+    kv(o, "ss_render_samples", std::to_string(S.ss_samples));
     kv(o, "ss_fbo_status", S.fbo ? hex32(S.fbo_status) : "n/a");
     kv(o, "ss_fbo_depth_stencil", S.ds_name);
     kv(o, "ss_fbo_gl_error", hex32(S.create_gl_error));
@@ -1426,6 +1594,8 @@ std::string report_text() {
     kvu(o, "ss_diag_wrapper_calls_inactive", diag_load(&S.wrapper_calls_inactive));
     kvu(o, "ss_diag_wrapper_calls_other_thread", diag_load(&S.wrapper_calls_other_thread));
     kvu(o, "ss_diag_draws_other_thread", diag_load(&S.ss_active_non_render_thread_draws));
+    kvu(o, "ss_diag_attachment_queries_virtualized", S.attachment_queries_virtualized);
+    kvu(o, "ss_diag_sample_queries_virtualized", S.sample_queries_virtualized);
     kvu(o, "ss_diag_viewport_full_surface", diag_load(&S.viewport_full_surface));
     kvu(o, "ss_diag_viewport_non_surface", diag_load(&S.viewport_non_surface));
     kvu(o, "ss_diag_viewport_zero_or_negative", diag_load(&S.viewport_zero_or_negative));
@@ -1507,7 +1677,7 @@ void pre_swap(EGLDisplay dpy, EGLSurface surface) {
     S.last_frame_other = S.frame_other;
     S.frame_redirected = 0;
     S.frame_other = 0;
-    if (S.state != ST_ACTIVE || !g_engaged.load(std::memory_order_acquire) || !t_mark) return;
+    if (S.state != ST_ACTIVE || !g_engaged.load(std::memory_order_acquire)) return;
     if (surface != S.surface) return;                       // some other surface is being presented
     if (eglGetCurrentContext() != S.ctx) { g_engaged.store(0, std::memory_order_release); ++S.ctx_lost_events; return; }
     EGLint sw = 0, sh = 0;

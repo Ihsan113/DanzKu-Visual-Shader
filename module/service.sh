@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# DanzKu Visual Shader V5.2.29
+# DanzKu Visual Shader V5.3.0
 # Root-side config bridge and target-list bootstrap only. No GPU, SurfaceFlinger, HWC, or performance tweaks.
 CONF="/data/adb/modules/danzku_visual_shader/config/visual.conf"
 TARGETS="/data/adb/modules/danzku_visual_shader/config/targets.conf"

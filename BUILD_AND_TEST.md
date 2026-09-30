@@ -1,6 +1,6 @@
 
-### V5.2.30 APK Quick Overlay
-The monitor APK adds a floating Quick Tuning overlay. It edits the existing root-backed `visual.conf` and then refreshes the existing native bridge; no native rendering code is changed in this release. The overlay requires Android's `SYSTEM_ALERT_WINDOW` permission.
+### V5.3.0 — Additive reconstruction + True SS compatibility
+V5.3.0 keeps the existing Quick Tuning overlay and adds the native additive reconstruction/temporal core, True SS compatibility hardening, and the device-aware `RECOMMENDED` profile. The overlay requires Android's `SYSTEM_ALERT_WINDOW` permission.
 # Build, install dan pengujian — Stage 3 True Supersampling
 
 Ini murni instruksi (tidak dijalankan di container ini — tidak ada Android
@@ -8,6 +8,8 @@ NDK/SDK dan tidak ada akses ke server Google). Semua source sudah
 dimodifikasi dan siap dibuild.
 
 ## 0. Sanity check dulu di PC/laptop (opsional tapi disarankan)
+
+V5.3.0 keeps the APK as a high-level Recommendation selector while the native renderer performs per-frame temporal/quality adaptation. The native shader now uses additive feature compositing and the SS path uses EGL-context activation plus MSAA-aware targets.
 
 Ini cuma cek logika C++ murni pakai compiler host biasa (bukan build Android
 sungguhan), tapi bisa langsung ketahuan kalau ada regresi logika sebelum
@@ -43,7 +45,7 @@ cmake --build build --config Release -j$(nproc)
 
 Kalau mau lewat GitHub Actions saja: push branch ini, workflow
 `shader-module` otomatis jalan dan hasil ZIP-nya ada di artifact
-`DanzKu-Visual-Shader-v5.2.29-install`.
+`DanzKu-Visual-Shader-v5.3.0-install`.
 
 ## 2. Susun paket Magisk (kalau build manual, bukan lewat CI)
 
@@ -58,12 +60,12 @@ cp module/uninstall.sh dist/danzku_visual_shader/uninstall.sh
 cp module/config/visual.conf dist/danzku_visual_shader/config/visual.conf
 cp module/config/targets.conf dist/danzku_visual_shader/config/targets.conf
 chmod 0755 dist/danzku_visual_shader/service.sh dist/danzku_visual_shader/uninstall.sh
-cd dist && zip -r DanzKu-Visual-Shader-v5.2.29-INSTALL.zip danzku_visual_shader
+cd dist && zip -r DanzKu-Visual-Shader-v5.3.0-INSTALL.zip danzku_visual_shader
 ```
 
 ## 3. Instal di POCO M5
 
-1. Pindahkan `DanzKu-Visual-Shader-v5.2.29-INSTALL.zip` ke HP (adb push atau
+1. Pindahkan `DanzKu-Visual-Shader-v5.3.0-INSTALL.zip` ke HP (adb push atau
    Termux `cp` kalau sudah di HP).
 2. Buka Magisk → Modules → Install from storage → pilih ZIP itu.
 3. **Reboot** (wajib, supaya Zygisk memuat modul baru sebelum

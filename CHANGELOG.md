@@ -1,3 +1,10 @@
+
+## V5.2.29 — APK Quick Overlay + SS UI Sync
+- Fixed APK synchronization for `supersampling_scale` and `supersampling_max_pixels`; sliders now read the live config during normal refresh.
+- Added a permission-aware floating Quick Tuning overlay controlled entirely from the APK.
+- Overlay supports quick switches and sliders for core engine, True Supersampling, AA/edge, temporal/AI, V9–V12, and color controls.
+- Overlay position is draggable and remembered locally.
+- Native SS code is intentionally unchanged from V5.2.29 Zoom Fix.
 ## V5.2.29 — True SS/V40 framebuffer handoff fix
 
 - After True Supersampling resolve, both READ and DRAW framebuffer bindings are explicitly restored to the real EGL default framebuffer (FB 0).

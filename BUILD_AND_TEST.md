@@ -1,3 +1,6 @@
+
+### V5.2.30 APK Quick Overlay
+The monitor APK adds a floating Quick Tuning overlay. It edits the existing root-backed `visual.conf` and then refreshes the existing native bridge; no native rendering code is changed in this release. The overlay requires Android's `SYSTEM_ALERT_WINDOW` permission.
 # Build, install dan pengujian — Stage 3 True Supersampling
 
 Ini murni instruksi (tidak dijalankan di container ini — tidak ada Android

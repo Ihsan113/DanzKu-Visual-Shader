@@ -21,6 +21,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.*;
+import android.widget.FrameLayout;
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -59,6 +60,8 @@ public class MainActivity extends Activity {
     TextView overlayText;
     View overlayView;
     boolean overlayVisible = false;
+    boolean overlayCollapsed = false;
+    TextView overlayPill;
     final ArrayList<Switch> featureSwitches = new ArrayList<>();
     final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     final HashMap<String,String> defaultStrengths = new HashMap<>();
@@ -70,6 +73,16 @@ public class MainActivity extends Activity {
     SeekBar saturationSeekBar;
     TextView saturationValueLabel;
     SeekBar vibranceSeekBar, anisotropicSeekBar, adaptiveTextureSeekBar, hdrSeekBar;
+    SeekBar supersamplingScaleSeekBar, supersamplingMaxPixelsSeekBar;
+    TextView supersamplingScaleValueLabel, supersamplingMaxPixelsValueLabel;
+    LinearLayout overlayPanel, overlayQuickControls;
+    TextView overlayHeader, overlayFpsText, overlayDetailText;
+    Button overlayTuneButton, overlayDetailButton;
+    boolean overlayTuningMode = false;
+    final HashMap<String, SeekBar> overlayFloatBars = new HashMap<>();
+    final HashMap<String, TextView> overlayFloatLabels = new HashMap<>();
+    final HashMap<String, Switch> overlayFeatureSwitches = new HashMap<>();
+    volatile String lastOverlayConfig = "";
     TextView vibranceValueLabel, anisotropicValueLabel, adaptiveTextureValueLabel, hdrValueLabel;
     final HashMap<String, ArrayList<View>> dependentControls = new HashMap<>();
 
@@ -438,8 +451,8 @@ public class MainActivity extends Activity {
 
         addSectionHeader("STAGE 3 — TRUE SUPERSAMPLING");
         addToggle("True Supersampling", "true_supersampling");
-        addFloatControl("Supersampling Scale", "supersampling_scale", 1.0f, 2.0f, 1.25f, "", "", "%.2fx");
-        addFloatControl("Supersampling Max Pixels", "supersampling_max_pixels", 1000000f, 8000000f, 4200000f, "", "", "%.0f px");
+        addFloatControl("Supersampling Scale", "supersampling_scale", 1.0f, 2.0f, 1.25f, "supersamplingScaleSeekBar", "supersamplingScaleValueLabel", "%.2fx");
+        addFloatControl("Supersampling Max Pixels", "supersampling_max_pixels", 1000000f, 8000000f, 4200000f, "supersamplingMaxPixelsSeekBar", "supersamplingMaxPixelsValueLabel", "%.0f px");
 
         addSectionHeader("ANTI-ALIASING & EDGE QUALITY");
         addToggle("Advanced AA", "advanced_aa");
@@ -1049,10 +1062,15 @@ public class MainActivity extends Activity {
         else if ("anisotropicSeekBar".equals(barField)) { anisotropicSeekBar=bar; anisotropicValueLabel=valueLabel; }
         else if ("adaptiveTextureSeekBar".equals(barField)) { adaptiveTextureSeekBar=bar; adaptiveTextureValueLabel=valueLabel; }
         else if ("hdrSeekBar".equals(barField)) { hdrSeekBar=bar; hdrValueLabel=valueLabel; }
+        else if ("supersamplingScaleSeekBar".equals(barField)) { supersamplingScaleSeekBar=bar; supersamplingScaleValueLabel=valueLabel; }
+        else if ("supersamplingMaxPixelsSeekBar".equals(barField)) { supersamplingMaxPixelsSeekBar=bar; supersamplingMaxPixelsValueLabel=valueLabel; }
     }
 
     String parentForControl(String key) {
         if (key == null) return null;
+
+        // True Supersampling controls only make sense while the SS stage is on.
+        if ("supersampling_scale".equals(key) || "supersampling_max_pixels".equals(key)) return "true_supersampling";
 
         // AI++ controls.
         if (key.startsWith("ai_") && !"ai_dynamic_quality".equals(key)) {
@@ -1779,6 +1797,8 @@ public class MainActivity extends Activity {
             }
         }
         syncSaturationControl(config);
+        syncFloatControl(config, "supersampling_scale", supersamplingScaleSeekBar, supersamplingScaleValueLabel, 1.0f, 2.0f, 1.25f, "%.2fx");
+        syncFloatControl(config, "supersampling_max_pixels", supersamplingMaxPixelsSeekBar, supersamplingMaxPixelsValueLabel, 1000000f, 8000000f, 4200000f, "%.0f px");
         syncFloatControl(config, "vibrance", vibranceSeekBar, vibranceValueLabel, 0.0f, 1.0f, 0.20f, "%.2f");
         syncFloatControl(config, "anisotropic_enhancement", anisotropicSeekBar, anisotropicValueLabel, 0.0f, 16.0f, 0.0f, "%.1f");
         syncFloatControl(config, "adaptive_texture_enhancement", adaptiveTextureSeekBar, adaptiveTextureValueLabel, 0.0f, 0.50f, 0.15f, "%.2f");
@@ -1793,7 +1813,7 @@ public class MainActivity extends Activity {
                 ((Button)v).setText(Settings.canDrawOverlays(this)?"OVERLAY PERMISSION: OK":"AKTIFKAN IZIN OVERLAY");
             }
             if ("overlay_button".equals(v.getTag()) && v instanceof Button) {
-                ((Button)v).setText(overlayVisible?"STOP FPS OVERLAY":"START FPS OVERLAY");
+                ((Button)v).setText(overlayVisible?"STOP OVERLAY":"START OVERLAY");
                 ((Button)v).setEnabled(Settings.canDrawOverlays(this));
             }
         }
@@ -1809,126 +1829,507 @@ public class MainActivity extends Activity {
         }
     }
 
+    void requestOverlayPermission() {
+        try {
+            Intent i=new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:"+getPackageName()));
+            startActivity(i);
+        } catch(Exception e) {
+            startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION));
+        }
+    }
+
+    Button overlayButton(String text) {
+        Button b = new Button(this);
+        b.setAllCaps(false);
+        b.setText(text);
+        b.setTextSize(11);
+        b.setTextColor(Color.WHITE);
+        b.setTypeface(null, Typeface.BOLD);
+        b.setMinHeight(dp(34));
+        b.setPadding(dp(8), 0, dp(8), 0);
+        b.setBackground(roundedBg("#222B4A", "#3A476A", 10));
+        return b;
+    }
+
+    LinearLayout overlayCard() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(10), dp(7), dp(10), dp(7));
+        box.setBackground(roundedBg("#151E34", "#2B385A", 12));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 0, 0, dp(6));
+        box.setLayoutParams(lp);
+        return box;
+    }
+
+    void addOverlaySectionLabel(String title) {
+        TextView t = tv(title);
+        t.setTextSize(10);
+        t.setTypeface(null, Typeface.BOLD);
+        t.setTextColor(uiColor("#A5AEFF"));
+        t.setPadding(0, dp(5), 0, dp(5));
+        overlayQuickControls.addView(t);
+    }
+
+    void addOverlayToggle(String label, String key) {
+        Switch sw = new Switch(this);
+        sw.setText(label);
+        sw.setTextSize(12);
+        sw.setTextColor(uiColor("#E7EBF8"));
+        sw.setPadding(0, 0, 0, 0);
+        sw.setMinHeight(dp(42));
+        sw.setTag(key);
+        sw.setOnCheckedChangeListener((button, checked) -> {
+            if (button.isPressed()) {
+                setFeatureKey(key, checked);
+                ioExecutor.execute(() -> {
+                    String cfg = configText();
+                    runOnUiThread(() -> syncOverlayControls(cfg));
+                });
+            }
+        });
+        overlayFeatureSwitches.put(key, sw);
+        overlayQuickControls.addView(sw);
+    }
+
+    void addOverlayFloat(String title, String key, float min, float max, float def, String format) {
+        LinearLayout card = overlayCard();
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView titleView = tv(title);
+        titleView.setTextSize(11);
+        titleView.setTextColor(uiColor("#E7EBF8"));
+        titleView.setTypeface(null, Typeface.BOLD);
+        row.addView(titleView, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView value = tv(String.format(Locale.US, format, def));
+        value.setTextSize(10);
+        value.setTypeface(null, Typeface.BOLD);
+        value.setTextColor(uiColor("#A5AEFF"));
+        value.setGravity(Gravity.CENTER);
+        value.setPadding(dp(7), dp(3), dp(7), dp(3));
+        value.setBackground(roundedBg("#222B4A", null, 8));
+        row.addView(value);
+        card.addView(row);
+
+        SeekBar bar = new SeekBar(this);
+        bar.setMax(100);
+        bar.setProgress(Math.round((def-min)/(max-min)*100f));
+        bar.setPadding(0, 0, 0, 0);
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                float v=min+(progress/100.0f)*(max-min);
+                value.setText(String.format(Locale.US, format, v));
+            }
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                if (!seekBar.isEnabled()) return;
+                final float v=min+(seekBar.getProgress()/100.0f)*(max-min);
+                ioExecutor.execute(() -> {
+                    markVisualProfileCustom();
+                    writeConfigValue(key, String.format(Locale.US, format, v));
+                    syncNativeControlFromConfigNow();
+                    String cfg = configText();
+                    runOnUiThread(() -> {
+                        syncOverlayControls(cfg);
+                        Toast.makeText(MainActivity.this, title + " diterapkan", Toast.LENGTH_SHORT).show();
+                    });
+                });
+            }
+        });
+        card.addView(bar);
+        overlayFloatBars.put(key, bar);
+        overlayFloatLabels.put(key, value);
+        overlayQuickControls.addView(card);
+    }
+
+    void addOverlayVisualPresets() {
+        addOverlaySectionLabel("REKOMENDASI VISUAL");
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        String[] names = {"NATURAL", "VIVID", "CINEMATIC"};
+        for (String name : names) {
+            Button b = overlayButton(name);
+            b.setTextSize(10);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(38), 1f);
+            lp.setMargins(dp(2), 0, dp(2), 0);
+            b.setLayoutParams(lp);
+            b.setOnClickListener(v -> {
+                setButtonBusy(b, true, name, "Applying...");
+                applySmartPreset(name, b);
+            });
+            row.addView(b);
+        }
+        overlayQuickControls.addView(row);
+        TextView hint = tv("Natural: seimbang • Vivid: warna lebih kuat • Cinematic: karakter film");
+        hint.setTextSize(9);
+        hint.setTextColor(uiColor("#AAB4D0"));
+        hint.setPadding(dp(2), dp(3), dp(2), dp(5));
+        overlayQuickControls.addView(hint);
+    }
+
+    void buildOverlayQuickControls() {
+        overlayQuickControls.removeAllViews();
+        overlayFeatureSwitches.clear();
+        overlayFloatBars.clear();
+        overlayFloatLabels.clear();
+
+        addOverlaySectionLabel("MASTER VISUAL");
+        addOverlayToggle("Master Visual ON / OFF", "enabled");
+        addOverlayVisualPresets();
+
+        addOverlaySectionLabel("ENGINE");
+        addOverlayToggle("RAM Optimization", "ram_optimization");
+        addOverlayToggle("FPS Boost", "fps_boost");
+        addOverlayToggle("Frame Buffer Optimization", "frame_buffer_optimization");
+
+        addOverlaySectionLabel("TRUE SUPERSAMPLING");
+        addOverlayToggle("True Supersampling", "true_supersampling");
+        addOverlayFloat("SS Scale", "supersampling_scale", 1.0f, 2.0f, 1.25f, "%.2fx");
+        addOverlayFloat("SS Max Pixels", "supersampling_max_pixels", 1000000f, 8000000f, 4200000f, "%.0f px");
+
+        addOverlaySectionLabel("QUALITY");
+        addOverlayToggle("Advanced AA", "advanced_aa");
+        addOverlayFloat("AA Strength", "aa_strength", 0f, 1f, 0.22f, "%.2f");
+        addOverlayToggle("Edge-Aware", "edge_aware");
+        addOverlayFloat("Edge Strength", "edge_strength", 0f, 1f, 0.10f, "%.2f");
+        addOverlayToggle("Shadow Enhancement", "shadow_enhancement");
+        addOverlayFloat("Shadow Refine", "shadow_refine", 0f, 1f, 0.05f, "%.2f");
+        addOverlayFloat("Local Contrast", "local_contrast", 0f, 1f, 0.08f, "%.2f");
+        addOverlayFloat("Material Detail", "material_detail", 0f, 1f, 0.12f, "%.2f");
+
+        addOverlaySectionLabel("TEMPORAL / AI");
+        addOverlayToggle("Temporal", "temporal");
+        addOverlayFloat("Temporal Strength", "temporal_strength", 0f, 1f, 0.20f, "%.2f");
+        addOverlayToggle("AI++ Reconstruction", "ai_reconstruction_v6");
+        addOverlayToggle("AI Dynamic Quality", "ai_dynamic_quality");
+        addOverlayFloat("AI Detail Budget", "ai_detail_budget", 0f, 1f, 0.80f, "%.2f");
+        addOverlayToggle("V9 Reconstruction", "v9_reconstruction");
+        addOverlayToggle("V10 Anti-Shimmer", "v10_antishimmer");
+        addOverlayToggle("V11 Detail Preservation", "v11_detail_preservation");
+        addOverlayToggle("V12 Motion Handling", "v12_motion_handling");
+
+        addOverlaySectionLabel("COLOR");
+        addOverlayToggle("Color Master", "color_master");
+        addOverlayToggle("Texture Master", "texture_master");
+        addOverlayFloat("Saturation", "saturation", 1.0f, 1.50f, 1.25f, "%.2f×");
+        addOverlayFloat("Vibrance", "vibrance", 0f, 1f, 0.20f, "%.2f");
+        addOverlayFloat("HDR Enhancement", "hdr_enhancement", 0f, 1f, 0.10f, "%.2f");
+
+        addOverlaySectionLabel("GESER HEADER UNTUK MEMINDAHKAN OVERLAY");
+        ioExecutor.execute(() -> {
+            String cfg = configText();
+            runOnUiThread(() -> syncOverlayControls(cfg));
+        });
+    }
+
+    boolean overlayParentEnabled(String config, String key) {
+        String master=configValueFromText(config,"enabled");
+        if (!isFeatureOn(master == null ? "1" : master)) return "enabled".equals(key);
+        if ("enabled".equals(key)) return true;
+        String parent=parentForControl(key);
+        return parent == null || isFeatureOn(configValueFromText(config,parent));
+    }
+
+    void syncOverlayControls(String config) {
+        if (!overlayVisible || config == null) return;
+        lastOverlayConfig=config;
+        for (Map.Entry<String, Switch> e : overlayFeatureSwitches.entrySet()) {
+            String key=e.getKey(); String raw=configValueFromText(config,key);
+            Switch sw=e.getValue();
+            sw.setOnCheckedChangeListener(null);
+            sw.setChecked(isFeatureOn(raw));
+            boolean usable = overlayParentEnabled(config,key);
+            sw.setEnabled(usable);
+            sw.setAlpha(usable?1f:0.45f);
+            sw.setOnCheckedChangeListener((button, checked) -> {
+                if (button.isPressed()) {
+                    setFeatureKey(key, checked);
+                    ioExecutor.execute(() -> {
+                        String cfg=configText();
+                        runOnUiThread(() -> syncOverlayControls(cfg));
+                    });
+                }
+            });
+        }
+        syncOverlayFloat(config,"supersampling_scale",1f,2f,"%.2fx");
+        syncOverlayFloat(config,"supersampling_max_pixels",1000000f,8000000f,"%.0f px");
+        syncOverlayFloat(config,"aa_strength",0f,1f,"%.2f");
+        syncOverlayFloat(config,"edge_strength",0f,1f,"%.2f");
+        syncOverlayFloat(config,"shadow_refine",0f,1f,"%.2f");
+        syncOverlayFloat(config,"local_contrast",0f,1f,"%.2f");
+        syncOverlayFloat(config,"material_detail",0f,1f,"%.2f");
+        syncOverlayFloat(config,"temporal_strength",0f,1f,"%.2f");
+        syncOverlayFloat(config,"ai_detail_budget",0f,1f,"%.2f");
+        syncOverlayFloat(config,"saturation",1f,1.5f,"%.2f×");
+        syncOverlayFloat(config,"vibrance",0f,1f,"%.2f");
+        syncOverlayFloat(config,"hdr_enhancement",0f,1f,"%.2f");
+    }
+
+    void syncOverlayFloat(String config,String key,float min,float max,String format) {
+        SeekBar bar=overlayFloatBars.get(key); TextView label=overlayFloatLabels.get(key);
+        if(bar==null || label==null) return;
+        float value=min+(max-min)/2f;
+        String raw=configValueFromText(config,key);
+        try { if(raw!=null) value=Float.parseFloat(raw.trim()); } catch(Exception ignored) {}
+        if(value<min)value=min; if(value>max)value=max;
+        int progress=Math.round((value-min)/(max-min)*100f);
+        bar.setOnSeekBarChangeListener(null);
+        bar.setProgress(progress);
+        label.setText(String.format(Locale.US,format,value));
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar b,int p,boolean fromUser){
+                float v=min+(p/100f)*(max-min);
+                label.setText(String.format(Locale.US,format,v));
+            }
+            public void onStartTrackingTouch(SeekBar b) {}
+            public void onStopTrackingTouch(SeekBar b) {
+                if(!b.isEnabled())return;
+                final float v=min+(b.getProgress()/100f)*(max-min);
+                ioExecutor.execute(() -> {
+                    markVisualProfileCustom();
+                    writeConfigValue(key,String.format(Locale.US,format,v));
+                    syncNativeControlFromConfigNow();
+                    String cfg=configText();
+                    runOnUiThread(() -> syncOverlayControls(cfg));
+                });
+            }
+        });
+        boolean usable=overlayParentEnabled(config,key);
+        bar.setEnabled(usable);
+        bar.setAlpha(usable?1f:0.45f);
+    }
+
     void startOverlay() {
         if (overlayVisible || !Settings.canDrawOverlays(this)) return;
         wm=(WindowManager)getSystemService(WINDOW_SERVICE);
-        overlayText=new TextView(this);
-        overlayText.setTextColor(Color.WHITE);
-        overlayText.setTextSize(13);
-        overlayText.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
-        overlayText.setPadding(18,14,18,14);
-        overlayText.setBackgroundColor(Color.argb(190,20,20,20));
-        overlayText.setOnTouchListener(new View.OnTouchListener() {
-            int downX,downY,baseX,baseY;
-            boolean moved;
-            long downAt;
+
+        FrameLayout overlayRoot = new FrameLayout(this);
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(8), dp(7), dp(8), dp(7));
+        panel.setBackground(roundedBg("#D9141B30", "#53658E", 16));
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+
+        overlayHeader=tv("DANZKU V5.2.30");
+        overlayHeader.setTextColor(Color.WHITE);
+        overlayHeader.setTextSize(11);
+        overlayHeader.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
+        overlayHeader.setPadding(dp(6), dp(5), dp(6), dp(5));
+        overlayHeader.setBackground(roundedBg("#202A45", "#334368", 9));
+        top.addView(overlayHeader,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));
+
+        overlayFpsText=tv("FPS --");
+        overlayFpsText.setTextColor(uiColor("#DCE4FF"));
+        overlayFpsText.setTextSize(11);
+        overlayFpsText.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
+        overlayFpsText.setGravity(Gravity.CENTER);
+        top.addView(overlayFpsText,new LinearLayout.LayoutParams(dp(72),LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        overlayTuneButton=overlayButton("TUNE");
+        top.addView(overlayTuneButton,new LinearLayout.LayoutParams(dp(54),dp(38)));
+        overlayDetailButton=overlayButton("DETAIL");
+        top.addView(overlayDetailButton,new LinearLayout.LayoutParams(dp(60),dp(38)));
+        Button minimize=overlayButton("−");
+        top.addView(minimize,new LinearLayout.LayoutParams(dp(40),dp(38)));
+        Button close=overlayButton("×");
+        top.addView(close,new LinearLayout.LayoutParams(dp(40),dp(38)));
+        panel.addView(top);
+
+        overlayPanel = panel;
+        overlayDetailText = tv("");
+        overlayDetailText.setTextSize(10);
+        overlayDetailText.setTextColor(uiColor("#AAB4D0"));
+        overlayDetailText.setTypeface(Typeface.MONOSPACE, Typeface.NORMAL);
+        overlayDetailText.setPadding(dp(7), dp(5), dp(7), dp(5));
+        overlayDetailText.setBackground(roundedBg("#11192B", "#2B385A", 10));
+        overlayDetailText.setVisibility(View.GONE);
+        panel.addView(overlayDetailText);
+
+        overlayQuickControls = new LinearLayout(this);
+        overlayQuickControls.setOrientation(LinearLayout.VERTICAL);
+        overlayQuickControls.setPadding(0, dp(5), 0, 0);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.setVerticalScrollBarEnabled(true);
+        scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        scroll.setVisibility(View.GONE);
+        scroll.addView(overlayQuickControls,new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,ScrollView.LayoutParams.WRAP_CONTENT));
+        panel.addView(scroll,new LinearLayout.LayoutParams(dp(330),dp(520)));
+        overlayPill=tv("◉  DanzKu  •  FPS --  ▴");
+        overlayPill.setTextSize(12);
+        overlayPill.setTextColor(Color.WHITE);
+        overlayPill.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
+        overlayPill.setPadding(dp(14),dp(10),dp(14),dp(10));
+        overlayPill.setBackground(roundedBg("#E9141B30", "#7778F5", 24));
+        overlayPill.setVisibility(View.GONE);
+        overlayRoot.addView(panel,new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.TOP|Gravity.START));
+        overlayRoot.addView(overlayPill,new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.TOP|Gravity.START));
+        overlayView=overlayRoot;
+
+        minimize.setOnClickListener(v -> {
+            overlayCollapsed=true;
+            panel.setVisibility(View.GONE);
+            overlayPill.setVisibility(View.VISIBLE);
+        });
+        overlayPill.setOnClickListener(v -> {
+            overlayCollapsed=false;
+            overlayPill.setVisibility(View.GONE);
+            panel.setVisibility(View.VISIBLE);
+        });
+        overlayPill.setOnTouchListener(new View.OnTouchListener() {
+            int downX, downY, baseX, baseY; boolean moved;
             public boolean onTouch(View v, MotionEvent e) {
-                WindowManager.LayoutParams lp=(WindowManager.LayoutParams)v.getLayoutParams();
+                WindowManager.LayoutParams lp=(WindowManager.LayoutParams)overlayView.getLayoutParams();
+                if(e.getAction()==MotionEvent.ACTION_DOWN){
+                    downX=(int)e.getRawX(); downY=(int)e.getRawY();
+                    baseX=lp.x; baseY=lp.y; moved=false; return true;
+                }
+                if(e.getAction()==MotionEvent.ACTION_MOVE){
+                    int dx=(int)e.getRawX()-downX, dy=(int)e.getRawY()-downY;
+                    if(Math.abs(dx)>dp(6)||Math.abs(dy)>dp(6))moved=true;
+                    if(moved){lp.x=baseX+dx;lp.y=baseY+dy;wm.updateViewLayout(overlayView,lp);}
+                    return true;
+                }
+                if(e.getAction()==MotionEvent.ACTION_UP){
+                    if(moved && prefs!=null) prefs.edit().putInt("overlay_x",lp.x).putInt("overlay_y",lp.y).apply();
+                    else { overlayCollapsed=false; overlayPill.setVisibility(View.GONE); panel.setVisibility(View.VISIBLE); }
+                    return true;
+                }
+                return true;
+            }
+        });
+
+        overlayTuneButton.setOnClickListener(v -> {
+            overlayTuningMode=!overlayTuningMode;
+            scroll.setVisibility(overlayTuningMode?View.VISIBLE:View.GONE);
+            overlayTuneButton.setText(overlayTuningMode?"HIDE":"TUNE");
+            if(overlayTuningMode) {
+                ioExecutor.execute(() -> {
+                    String cfg=configText();
+                    runOnUiThread(() -> syncOverlayControls(cfg));
+                });
+            }
+        });
+        overlayDetailButton.setOnClickListener(v -> {
+            overlayDetailMode=!overlayDetailMode;
+            if (overlayDetailText != null) overlayDetailText.setVisibility(overlayDetailMode ? View.VISIBLE : View.GONE);
+            renderOverlayFromCache();
+        });
+        close.setOnClickListener(v -> stopOverlay());
+
+        overlayHeader.setOnTouchListener(makeOverlayDragListener());
+
+        WindowManager.LayoutParams lp=new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT);
+        lp.gravity=Gravity.TOP|Gravity.START;
+        lp.x=prefs!=null?prefs.getInt("overlay_x",16):16;
+        lp.y=prefs!=null?prefs.getInt("overlay_y",80):80;
+        wm.addView(overlayView,lp);
+        overlayVisible=true;
+        buildOverlayQuickControls();
+        updateOverlay();
+        updateOverlayPermissionUi();
+    }
+
+    View.OnTouchListener makeOverlayDragListener() {
+        return new View.OnTouchListener() {
+            int downX,downY,baseX,baseY; boolean moved; long downAt;
+            public boolean onTouch(View v, MotionEvent e) {
+                WindowManager.LayoutParams lp=(WindowManager.LayoutParams)v.getRootView().getLayoutParams();
                 if(e.getAction()==MotionEvent.ACTION_DOWN){
                     downX=(int)e.getRawX(); downY=(int)e.getRawY();
                     baseX=lp.x; baseY=lp.y; moved=false; downAt=System.currentTimeMillis();
                     return true;
                 }
                 if(e.getAction()==MotionEvent.ACTION_MOVE){
-                    int dx=(int)e.getRawX()-downX, dy=(int)e.getRawY()-downY;
-                    if(Math.abs(dx)>dp(8) || Math.abs(dy)>dp(8)) moved=true;
-                    if(moved){
-                        lp.x=baseX+dx; lp.y=baseY+dy; wm.updateViewLayout(v,lp);
-                    }
+                    int dx=(int)e.getRawX()-downX,dy=(int)e.getRawY()-downY;
+                    if(Math.abs(dx)>dp(6)||Math.abs(dy)>dp(6))moved=true;
+                    if(moved){lp.x=baseX+dx;lp.y=baseY+dy;wm.updateViewLayout(v.getRootView(),lp);}
                     return true;
                 }
                 if(e.getAction()==MotionEvent.ACTION_UP){
-                    long duration=System.currentTimeMillis()-downAt;
-                    if(!moved && duration < 700L){
-                        overlayDetailMode=!overlayDetailMode;
-                        renderOverlayFromCache();
+                    if(moved && prefs!=null){
+                        WindowManager.LayoutParams now=(WindowManager.LayoutParams)v.getRootView().getLayoutParams();
+                        prefs.edit().putInt("overlay_x",now.x).putInt("overlay_y",now.y).apply();
                     }
                     return true;
                 }
                 return true;
             }
-        });
-        overlayView=overlayText;
-        WindowManager.LayoutParams lp=new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                PixelFormat.TRANSLUCENT);
-        lp.gravity=Gravity.TOP|Gravity.START;
-        lp.x=16; lp.y=80;
-        wm.addView(overlayView,lp);
-        overlayVisible=true;
-        updateOverlay();
-        updateOverlayPermissionUi();
+        };
     }
 
     void stopOverlay() {
         if (!overlayVisible) return;
         try { if(wm!=null && overlayView!=null) wm.removeView(overlayView); } catch(Exception ignored){}
-        overlayVisible=false; overlayView=null; overlayText=null;
+        overlayVisible=false; overlayCollapsed=false; overlayView=null; overlayPill=null; overlayText=null; overlayPanel=null; overlayQuickControls=null;
+        overlayHeader=null; overlayFpsText=null; overlayDetailText=null; overlayTuneButton=null; overlayDetailButton=null;
+        overlayTuningMode=false; overlayFeatureSwitches.clear(); overlayFloatBars.clear(); overlayFloatLabels.clear();
         updateOverlayPermissionUi();
     }
 
     void renderOverlayFromCache() {
-        if(!overlayVisible || overlayText==null) return;
+        if(!overlayVisible || overlayPanel==null || overlayFpsText==null) return;
         RenderStats render=lastRenderStats;
         String report=lastRuntimeReport;
-        StringBuilder b=new StringBuilder();
-        if(!overlayDetailMode){
-            b.append("FPS ").append(fmt(render.fps));
-        } else {
-            b.append("DANZKU V5.2.29\n");
-            if (lastRuntimePackage != null && lastRuntimePackage.length() > 0) {
-                b.append("APP ").append(appLabel(lastRuntimePackage)).append(" (").append(lastRuntimePackage).append(")\n");
-            }
-            b.append("FPS ").append(fmt(render.fps)).append("\n");
-            b.append("Render SRC ").append(render.fps > 0.0 ? "eglSwapBuffers" : "--").append("\n");
-            b.append("Frame ").append(fmt(render.frameTimeMs)).append(" ms\n");
-            b.append("Avg ").append(fmt(render.averageFps)).append("\n");
-            b.append("1% Low ").append(fmt(render.onePctLow)).append("\n");
-            b.append("Hook ").append(fmtLong(render.hookCalls)).append("\n");
-            b.append("Temporal ").append(featureState(value(report,"temporal"))).append("\n");
-            b.append("History ").append(featureState(value(report,"history_valid"))).append("\n");
-            b.append("AA ").append(featureState(value(report,"advanced_aa"))).append("\n");
-            b.append("Shadow ").append(featureState(value(report,"shadow_enhancement"))).append("\n");
-            b.append("AO ").append(featureState(value(report,"ao_enhancement"))).append("\n");
-            b.append("SSR ").append(featureState(value(report,"reflection_approximation"))).append("\n");
-            b.append("GL ").append(orDash(value(report,"last_gl_error")));
+        overlayFpsText.setText("FPS " + fmt(render.fps));
+        if (overlayPill != null) overlayPill.setText("◉  DanzKu  •  FPS " + fmt(render.fps) + "  ▴");
+        StringBuilder b=new StringBuilder("DANZKU V5.2.30");
+        if (lastRuntimePackage != null && lastRuntimePackage.length()>0) {
+            b.append(" • ").append(appLabel(lastRuntimePackage));
         }
-        overlayText.setText(b.toString());
+        if(overlayHeader!=null) overlayHeader.setText(b.toString());
+        if (overlayDetailText == null) return;
+        if(!overlayDetailMode){
+            overlayDetailText.setVisibility(View.GONE);
+            return;
+        }
+        overlayDetailText.setVisibility(View.VISIBLE);
+        StringBuilder d=new StringBuilder();
+        d.append("FPS ").append(fmt(render.fps)).append("  ");
+        d.append("Frame ").append(fmt(render.frameTimeMs)).append(" ms\n");
+        d.append("Avg ").append(fmt(render.averageFps)).append("  1% ").append(fmt(render.onePctLow)).append("\n");
+        d.append("SS ").append(orDash(value(report,"ss_requested_scale"))).append(" -> ").append(orDash(value(report,"ss_effective_scale"))).append("\n");
+        d.append("SS State ").append(orDash(value(report,"ss_state"))).append("\n");
+        d.append("Handoff ").append(orDash(value(report,"ss_downstream_handoff_ok"))).append("  Fail ").append(orDash(value(report,"ss_downstream_handoff_fail"))).append("\n");
+        d.append("GL ").append(orDash(value(report,"last_gl_error")));
+        overlayDetailText.setText(d.toString());
     }
 
     void updateOverlay() {
-        if(!overlayVisible || overlayText==null) return;
+        if(!overlayVisible || overlayView==null) return;
         if(!overlayUpdateRunning.compareAndSet(false, true)) return;
         ioExecutor.execute(() -> {
             try {
                 RuntimeState st=readRuntime();
                 if(!st.ready){
-                    lastRenderStats=new RenderStats();
-                    lastRuntimeReport="";
-                    lastRuntimePackage="";
-                    runOnUiThread(() -> {
-                        if(overlayVisible && overlayText != null) {
-                            overlayText.setText("DANZKU V5.2.29\nFPS --");
-                        }
-                    });
-                    return;
+                    lastRenderStats=new RenderStats(); lastRuntimeReport=""; lastRuntimePackage="";
+                } else {
+                    lastRuntimeReport=st.report; lastRuntimePackage=st.packageName; lastRenderStats=parseRenderStats(st.report);
                 }
-
-                // Realtime overlay uses only native eglSwapBuffers telemetry.
-                // The tap handler never starts a root shell; it only renders
-                // cached telemetry. Root I/O happens on the serialized worker.
-                lastRuntimeReport=st.report;
-                lastRuntimePackage=st.packageName;
-                lastRenderStats=parseRenderStats(st.report);
+                String cfg = overlayTuningMode ? configText() : null;
                 runOnUiThread(() -> {
-                    if(overlayVisible && overlayText != null) renderOverlayFromCache();
+                    if(overlayVisible && overlayView!=null){
+                        renderOverlayFromCache();
+                        if(cfg!=null) syncOverlayControls(cfg);
+                    }
                 });
-            } finally {
-                overlayUpdateRunning.set(false);
-            }
+            } finally { overlayUpdateRunning.set(false); }
         });
     }
 

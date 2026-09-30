@@ -27,6 +27,10 @@ final class SfFpsSampler {
         double refreshHz = -1.0;
         int samples = 0;
         long lastTs = -1L;
+        int windowCount = 0;
+        long ageMs = -1L;
+        int candidateCount = 0;
+        String method = "latency";
         String layer = "";
         String reason = "";
     }
@@ -35,29 +39,43 @@ final class SfFpsSampler {
     private static final long WINDOW_NS = 1_000_000_000L;
     private static final long STALE_MS = 1500L;
 
-    private String cachedPkg = "";
-    private List<String> candidates = new ArrayList<>();
-    private int candIdx = 0;
-    private int invalidStreak = 0;
-    private long prevLastTs = -1L;
-    private long lastChangeMs = 0L;
-    private Stats lastGood = null;
+    private static final long FRESH_NS = 1_200_000_000L;
+    private static final long RESCAN_MS = 3000L;
+    private static final int MAX_CANDIDATES = 8;
 
-    String currentLayer() {
-        return candIdx < candidates.size() ? candidates.get(candIdx) : "";
-    }
+    private String cachedPkg = "";
+    private String chosen = "";
+    private int staleTicks = 0;
+    private long lastScanMs = -1_000_000L;
+    private int lastCandidateCount = 0;
+    private final java.util.HashMap<String, Long> seenTs = new java.util.HashMap<>();
+    private boolean tsEnabled = false;
+    private final java.util.HashMap<String, long[]> tsPrev = new java.util.HashMap<>(); // nama -> {frames, ms}
+
+    String currentLayer() { return chosen; }
 
     void reset() {
         cachedPkg = "";
-        candidates = new ArrayList<>();
-        candIdx = 0;
-        invalidStreak = 0;
-        prevLastTs = -1L;
-        lastChangeMs = 0L;
-        lastGood = null;
+        chosen = "";
+        staleTicks = 0;
+        lastScanMs = -1_000_000L;
+        lastCandidateCount = 0;
+        seenTs.clear();
+        tsEnabled = false;
+        tsPrev.clear();
     }
 
-    Stats sample(String pkg, Shell sh, long nowMs) {
+    /** Layer dianggap hidup kalau frame terakhirnya baru (jam monotonic) ATAU timestamp-nya maju sejak sampel lalu. */
+    private boolean alive(String layer, Stats s, long nowNs) {
+        long age = nowNs - s.lastTs;
+        s.ageMs = age / 1_000_000L;
+        Long prev = seenTs.get(layer);
+        seenTs.put(layer, s.lastTs);
+        boolean advanced = prev != null && s.lastTs > prev;
+        return (age >= 0 && age <= FRESH_NS) || advanced;
+    }
+
+    Stats sample(String pkg, Shell sh, long nowMs, long nowNs) {
         if (pkg == null || pkg.length() == 0) {
             reset();
             return invalid("tidak ada target aktif");
@@ -67,59 +85,117 @@ final class SfFpsSampler {
             cachedPkg = pkg;
         }
 
-        int guard = 0;
-        while (guard++ < 6) {
-            if (candidates.isEmpty()) {
-                String list = sh.run("dumpsys SurfaceFlinger --list");
-                candidates = pickLayers(list, pkg);
-                candIdx = 0;
-                if (candidates.isEmpty()) {
-                    return invalid("layer " + pkg + " tidak ditemukan");
-                }
+        Stats frozen = null;
+        // 1) layer terpilih sebelumnya masih hidup?
+        if (chosen.length() > 0) {
+            Stats s = parseLatency(sh.run("dumpsys SurfaceFlinger --latency '" + chosen + "'"));
+            if (s.valid && alive(chosen, s, nowNs)) {
+                s.layer = chosen;
+                s.candidateCount = lastCandidateCount;
+                staleTicks = 0;
+                return s;
             }
-            String layer = candidates.get(candIdx);
-            String out = sh.run("dumpsys SurfaceFlinger --latency '" + layer + "'");
-            Stats s = parseLatency(out);
-            if (s.valid) {
-                s.layer = layer;
-                invalidStreak = 0;
-                return applyStale(s, nowMs);
-            }
-            // layer ini tidak punya data frame -> coba kandidat berikutnya
-            candIdx++;
-            if (candIdx >= candidates.size()) {
-                candidates = new ArrayList<>();
-                candIdx = 0;
-                invalidStreak++;
-                return invalid("layer tidak punya data frame");
-            }
+            if (s.valid) { s.layer = chosen; frozen = s; }
+            staleTicks++;
         }
-        return invalid("gagal memilih layer");
-    }
 
-    /** Kalau timestamp frame terakhir tidak bergerak > 1.5 s, berarti layer berhenti render -> FPS 0. */
-    private Stats applyStale(Stats s, long nowMs) {
-        long last = s.lastTs;
-        if (last != prevLastTs) {
-            prevLastTs = last;
-            lastChangeMs = nowMs;
-            lastGood = s;
-            return s;
+        // 2) cari ulang layer yang benar-benar jalan (di-throttle supaya tidak spam root)
+        if (chosen.length() == 0 || (staleTicks >= 2 && nowMs - lastScanMs >= RESCAN_MS)) {
+            lastScanMs = nowMs;
+            List<String> cands = pickLayers(sh.run("dumpsys SurfaceFlinger --list"), pkg);
+            lastCandidateCount = cands.size();
+            Stats best = null;
+            String bestLayer = "";
+            int limit = Math.min(cands.size(), MAX_CANDIDATES);
+            for (int i = 0; i < limit; i++) {
+                String layer = cands.get(i);
+                Stats s = parseLatency(sh.run("dumpsys SurfaceFlinger --latency '" + layer + "'"));
+                if (!s.valid) continue;
+                s.layer = layer;
+                boolean ok = alive(layer, s, nowNs);
+                if (!ok) { if (frozen == null) frozen = s; continue; }
+                if (best == null || s.windowCount > best.windowCount) { best = s; bestLayer = layer; }
+            }
+            if (best != null) {
+                chosen = bestLayer;
+                staleTicks = 0;
+                best.candidateCount = lastCandidateCount;
+                return best;
+            }
+            if (cands.isEmpty()) {
+                Stats ts = timestats(pkg, sh, nowMs);
+                if (ts != null) return ts;
+                return invalid("layer " + pkg + " tidak ditemukan");
+            }
         }
-        if (nowMs - lastChangeMs > STALE_MS) {
+
+        // 3) fallback: SurfaceFlinger timestats (hitung selisih totalFrames)
+        Stats ts = timestats(pkg, sh, nowMs);
+        if (ts != null) { ts.candidateCount = lastCandidateCount; return ts; }
+
+        // 4) semua layer beku -> benar-benar idle (atau layer salah)
+        if (frozen != null) {
             Stats z = new Stats();
             z.valid = true;
-            z.fps = 0.0;
-            z.averageFps = 0.0;
-            z.frameTimeMs = -1.0;
-            z.onePctLow = 0.0;
-            z.refreshHz = s.refreshHz;
-            z.samples = s.samples;
-            z.layer = s.layer;
-            z.reason = "layer idle";
+            z.fps = 0.0; z.averageFps = 0.0; z.onePctLow = 0.0; z.frameTimeMs = -1.0;
+            z.refreshHz = frozen.refreshHz;
+            z.samples = frozen.samples;
+            z.layer = frozen.layer;
+            z.ageMs = frozen.ageMs;
+            z.candidateCount = lastCandidateCount;
+            z.reason = "semua layer beku";
             return z;
         }
-        return lastGood != null ? lastGood : s;
+        return invalid("layer tidak punya data frame");
+    }
+
+    /** Fallback: `dumpsys SurfaceFlinger --timestats -dump` -> totalFrames per layer, FPS = delta / waktu. */
+    private Stats timestats(String pkg, Shell sh, long nowMs) {
+        if (!tsEnabled) {
+            sh.run("dumpsys SurfaceFlinger --timestats -enable");
+            tsEnabled = true;
+        }
+        String out = sh.run("dumpsys SurfaceFlinger --timestats -dump -maxlayers 40");
+        java.util.Map<String, Long> cur = parseTimestats(out, pkg);
+        Stats best = null;
+        for (java.util.Map.Entry<String, Long> e : cur.entrySet()) {
+            long[] prev = tsPrev.get(e.getKey());
+            tsPrev.put(e.getKey(), new long[]{e.getValue(), nowMs});
+            if (prev == null) continue;
+            long dt = nowMs - prev[1];
+            long df = e.getValue() - prev[0];
+            if (dt < 300 || df <= 0) continue;
+            double fps = df * 1000.0 / dt;
+            if (!(fps > 0.0 && fps <= 240.0)) continue;
+            if (best == null || fps > best.fps) {
+                Stats s = new Stats();
+                s.valid = true; s.fps = fps; s.frameTimeMs = 1000.0 / fps;
+                s.method = "timestats"; s.layer = e.getKey();
+                best = s;
+            }
+        }
+        return best;
+    }
+
+    static java.util.Map<String, Long> parseTimestats(String out, String pkg) {
+        java.util.Map<String, Long> m = new java.util.LinkedHashMap<>();
+        if (out == null) return m;
+        String name = null;
+        for (String raw : out.split("\n")) {
+            String line = raw.trim();
+            int eq = line.indexOf('=');
+            if (eq < 0) continue;
+            String k = line.substring(0, eq).trim();
+            String v = line.substring(eq + 1).trim();
+            if (k.equals("layerName")) name = v;
+            else if (k.equals("totalFrames") && name != null) {
+                if (name.contains(pkg)) {
+                    try { m.put(name, Long.parseLong(v)); } catch (NumberFormatException ignored) {}
+                }
+                name = null;
+            }
+        }
+        return m;
     }
 
     private Stats invalid(String why) {
@@ -207,6 +283,7 @@ final class SfFpsSampler {
         int start = n - 1;
         while (start > 0 && t[start - 1] >= last - WINDOW_NS) start--;
         int cnt = n - start;
+        s.windowCount = cnt;
         double fps;
         if (cnt >= 3) {
             fps = (cnt - 1) * 1e9 / (double) (last - t[start]);

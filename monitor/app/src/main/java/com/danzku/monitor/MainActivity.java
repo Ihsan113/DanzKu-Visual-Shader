@@ -67,6 +67,7 @@ public class MainActivity extends Activity {
     // FPS via SurfaceFlinger (root), tanpa hook. Hanya dipakai dari ioExecutor (single thread).
     final SfFpsSampler sfSampler = new SfFpsSampler();
     volatile String lastSfReason = "";
+    volatile String lastSfDiag = "";
     MaxHeightScrollView overlayScroll;
 
     volatile boolean overlayDetailMode = false;
@@ -139,13 +140,18 @@ public class MainActivity extends Activity {
         if (hook.ready) hook.source = "hook (fallback)";
         SfFpsSampler.Stats sf;
         try {
-            sf = sfSampler.sample(st.packageName, cmd -> su(cmd), SystemClock.uptimeMillis());
+            sf = sfSampler.sample(st.packageName, cmd -> su(cmd), SystemClock.uptimeMillis(), System.nanoTime());
         } catch (Throwable t) {
             sf = new SfFpsSampler.Stats();
             sf.reason = t.toString();
         }
         lastSfReason = sf.reason == null ? "" : sf.reason;
+        String ln = sf.layer == null ? "" : sf.layer;
+        if (ln.length() > 38) ln = ln.substring(0, 38) + "…";
+        lastSfDiag = sf.valid ? (sf.method + " | " + ln + " | age " + (sf.ageMs >= 0 ? sf.ageMs + "ms" : "--") + " | cand " + sf.candidateCount) : "";
         if (!sf.valid) return hook;
+        // SurfaceFlinger bilang idle tapi hook punya angka hidup -> percaya hook (layer mungkin salah)
+        if (sf.fps == 0.0 && hook.ready && hook.fps > 0.0) return hook;
         RenderStats r = new RenderStats();
         r.fps = sf.fps > 0.0 ? sf.fps : (sf.fps == 0.0 ? 0.0 : -1.0);
         r.averageFps = sf.averageFps;
@@ -154,7 +160,7 @@ public class MainActivity extends Activity {
         r.refreshHz = sf.refreshHz;
         r.hookCalls = hook.hookCalls;
         r.ready = true;
-        r.source = "SurfaceFlinger (root)";
+        r.source = "SurfaceFlinger (root)" + ("timestats".equals(sf.method) ? " [timestats]" : "");
         return r;
     }
 
@@ -2476,7 +2482,8 @@ public class MainActivity extends Activity {
         d.append("Avg ").append(fmt(render.averageFps)).append("  1% ").append(fmt(render.onePctLow)).append("\n");
         d.append("Src ").append(orDash(render.source));
         if (render.refreshHz > 0) d.append("  ").append(fmt(render.refreshHz)).append("Hz");
-        if (render.fps < 0 && lastSfReason.length() > 0) d.append("\n").append(lastSfReason);
+        if (render.fps <= 0 && lastSfReason.length() > 0) d.append("\n").append(lastSfReason);
+        if (lastSfDiag.length() > 0) d.append("\n").append(lastSfDiag);
         d.append("\n");
         d.append("SS ").append(orDash(value(report,"ss_requested_scale"))).append(" -> ").append(orDash(value(report,"ss_effective_scale"))).append("\n");
         d.append("SS State ").append(orDash(value(report,"ss_state"))).append("\n");

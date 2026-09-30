@@ -252,6 +252,7 @@ struct Engine {
 
     unsigned long long swaps = 0, frames_active = 0;
     unsigned long long resolve_ok = 0, resolve_fail = 0, resolve_consecutive_fail = 0;
+    unsigned long long downstream_handoff_ok = 0, downstream_handoff_fail = 0;
     GLenum resolve_gl_error = 0;
     int resolve_src_w = 0, resolve_src_h = 0, resolve_dst_w = 0, resolve_dst_h = 0;
     unsigned long long apply_errors = 0;
@@ -301,7 +302,9 @@ thread_local int t_mark = 0;
 inline bool ss_active() { return t_mark != 0 && g_engaged.load(std::memory_order_relaxed) != 0; }
 
 inline unsigned long long thread_tag() {
-    return static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(pthread_self()));
+    // pthread_t is an implementation-defined scalar on Android/bionic.
+    // Do not reinterpret_cast it through a pointer type; cast it directly.
+    return static_cast<unsigned long long>(pthread_self());
 }
 
 inline bool on_swap_thread() {
@@ -334,6 +337,8 @@ void drain_errors() {
     if (!gl.GetError) return;
     for (int i = 0; i < 16 && gl.GetError() != GL_NO_ERROR; ++i) {}
 }
+
+std::string dim(int w, int h);
 
 inline GLint sc_x(GLint v) { return static_cast<GLint>(lroundf(static_cast<float>(v) * S.sx)); }
 inline GLint sc_y(GLint v) { return static_cast<GLint>(lroundf(static_cast<float>(v) * S.sy)); }
@@ -1029,8 +1034,10 @@ void save_state(SavedState& s) {
 
 inline void set_cap(GLenum cap, GLboolean on) { if (on) gl.Enable(cap); else gl.Disable(cap); }
 
-// Restores everything except framebuffer bindings, viewport and scissor box, which the
-// caller manages (the swap hook leaves FB 0 bound for the DanzKu pipeline).
+// Restores GL pipeline state captured before the resolve. Framebuffer bindings and
+// viewport are intentionally left to resolve_to_default(), which must hand the fully
+// resolved image to any downstream post-process stage through the real EGL default
+// framebuffer (FB 0), never through the supersampled source FBO.
 void restore_state(const SavedState& s) {
     gl.UseProgram(static_cast<GLuint>(s.prog));
     gl.BindVertexArray(static_cast<GLuint>(s.vao));
@@ -1039,11 +1046,10 @@ void restore_state(const SavedState& s) {
     gl.BindSampler(0, static_cast<GLuint>(s.sampler0));
     gl.ActiveTexture(static_cast<GLenum>(s.active_tex));
     set_cap(GL_BLEND, s.blend); set_cap(GL_DEPTH_TEST, s.depth); set_cap(GL_CULL_FACE, s.cull);
-    set_cap(GL_STENCIL_TEST, s.stencil); set_cap(GL_DITHER, s.dither);
+    set_cap(GL_SCISSOR_TEST, s.scissor); set_cap(GL_STENCIL_TEST, s.stencil); set_cap(GL_DITHER, s.dither);
     set_cap(GL_RASTERIZER_DISCARD, s.rdiscard); set_cap(GL_SAMPLE_ALPHA_TO_COVERAGE, s.a2c);
     set_cap(GL_SAMPLE_COVERAGE, s.cov); set_cap(GL_POLYGON_OFFSET_FILL, s.poff);
     gl.ColorMask(s.cmask[0], s.cmask[1], s.cmask[2], s.cmask[3]);
-    // Scissor enable is restored by apply_effective_state() in post_swap.
 }
 
 bool resolve_to_default(int sw, int sh) {
@@ -1086,6 +1092,28 @@ bool resolve_to_default(int sw, int sh) {
     S.resolve_gl_error = err;
     drain_errors();
     if (err != GL_NO_ERROR) return false;
+
+    // Critical downstream handoff: the resolved image now lives in the real EGL
+    // default framebuffer. V40 runs immediately after pre_swap(), so leaving
+    // GL_READ_FRAMEBUFFER bound to S.fbo would make V40 capture only the upper-left
+    // portion of the supersampled source and stretch it back to the display, producing
+    // a scale-proportional zoom (e.g. 1.25x SS => roughly 80% crop => 1.25x zoom).
+    // Force BOTH bindings and the viewport to the actual display surface before any
+    // downstream post-processing reads the frame.
+    gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    gl.Viewport(0, 0, sw, sh);
+    GLint handoff_draw = -1, handoff_read = -1, handoff_vp[4] = {0, 0, 0, 0};
+    gl.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &handoff_draw);
+    gl.GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &handoff_read);
+    gl.GetIntegerv(GL_VIEWPORT, handoff_vp);
+    if (handoff_draw != 0 || handoff_read != 0 ||
+        handoff_vp[0] != 0 || handoff_vp[1] != 0 ||
+        handoff_vp[2] != sw || handoff_vp[3] != sh) {
+        ++S.downstream_handoff_fail;
+        return false;
+    }
+    ++S.downstream_handoff_ok;
     S.resolve_src_w = S.ss_w; S.resolve_src_h = S.ss_h;
     S.resolve_dst_w = sw; S.resolve_dst_h = sh;
     return true;
@@ -1387,6 +1415,8 @@ std::string report_text() {
     kvu(o, "ss_frames_active", S.frames_active);
     kvu(o, "ss_resolve_ok", S.resolve_ok);
     kvu(o, "ss_resolve_fail", S.resolve_fail);
+    kvu(o, "ss_downstream_handoff_ok", S.downstream_handoff_ok);
+    kvu(o, "ss_downstream_handoff_fail", S.downstream_handoff_fail);
     kv(o, "ss_resolve_gl_error", hex32(S.resolve_gl_error));
     kv(o, "ss_resolve_src", dim(S.resolve_src_w, S.resolve_src_h));
     kv(o, "ss_resolve_dst", dim(S.resolve_dst_w, S.resolve_dst_h));

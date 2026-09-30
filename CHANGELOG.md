@@ -1,3 +1,11 @@
+## V5.2.29 — True SS/V40 framebuffer handoff fix
+
+- After True Supersampling resolve, both READ and DRAW framebuffer bindings are explicitly restored to the real EGL default framebuffer (FB 0).
+- The downstream viewport is reset to the actual EGL surface dimensions before V40 processing.
+- The resolve path now restores the original scissor-enable state before handing the frame downstream.
+- Added `ss_downstream_handoff_ok` / `ss_downstream_handoff_fail` telemetry and source validation guards.
+- Bumped module/monitor metadata to V5.2.29 (versionCode 529).
+
 ## V5.2.28 — True SS Diagnostic Build
 
 - Adds dedicated `danzku_ss_diag_<pid>.log` snapshots every ~30 swaps.

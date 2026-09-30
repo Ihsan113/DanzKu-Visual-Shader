@@ -6,6 +6,7 @@ import sys
 
 root = Path(__file__).resolve().parents[1]
 src = (root / 'app/native/danzku_shader.cpp').read_text()
+ss_src = (root / 'app/native/danzku_ss.cpp').read_text()
 cfg = (root / 'module/config/visual.conf').read_text()
 prop = (root / 'module/module.prop').read_text()
 workflow = (root / '.github/workflows/build.yml').read_text()
@@ -94,7 +95,19 @@ for token in ai_report_tokens:
     if token not in src:
         errors.append(f'missing V6 AI runtime report token: {token}')
 
-# V5.2.27 diagnostic requirements.
+# V5.2.29 diagnostic requirements.
+# True Supersampling downstream handoff invariant: after resolving SS into the real
+# default framebuffer, the downstream V40 stage must read FB 0 at surface resolution.
+handoff_tokens = [
+    'gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);\n    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, 0);',
+    'gl.Viewport(0, 0, sw, sh);',
+    'ss_downstream_handoff_ok',
+    'ss_downstream_handoff_fail',
+]
+for token in handoff_tokens:
+    if token not in ss_src:
+        errors.append(f'missing True SS downstream handoff invariant: {token}')
+
 diagnostic_tokens = [
     'g_v27_last_draw_fbo', 'g_v27_last_read_fbo',
     'g_v27_last_draw_color_type', 'g_v27_last_draw_color_name',
@@ -114,21 +127,21 @@ diagnostic_tokens = [
 ]
 for token in diagnostic_tokens:
     if token not in src:
-        errors.append(f'missing V5.2.27 diagnostic token: {token}')
+        errors.append(f'missing V5.2.29 diagnostic token: {token}')
 
 monitor_gradle = (root / 'monitor/app/build.gradle').read_text()
 monitor_java = (root / 'monitor/app/src/main/java/com/danzku/monitor/MainActivity.java').read_text()
 workflow_monitor = (root / 'monitor/.github/workflows/build-apk.yml').read_text()
 workflow_root = (root / '.github/workflows/build.yml').read_text()
 
-if 'versionName "5.2.27"' not in monitor_gradle or 'versionCode 527' not in monitor_gradle:
-    errors.append('monitor Gradle metadata is not 5.2.27/versionCode 527')
-if 'V5.2.27' not in monitor_java:
-    errors.append('MainActivity version label is not V5.2.27')
-if 'V5.2.27' not in workflow_root or 'V5.2.27' not in workflow_monitor:
-    errors.append('workflow version label is not V5.2.27')
-if 'DanzKu-Monitor-V5.2.27-debug' not in workflow_root or 'DanzKu-Monitor-V5.2.27-debug' not in workflow_monitor:
-    errors.append('workflow artifact name is not V5.2.27')
+if 'versionName "5.2.29"' not in monitor_gradle or 'versionCode 529' not in monitor_gradle:
+    errors.append('monitor Gradle metadata is not 5.2.29/versionCode 529')
+if 'V5.2.29' not in monitor_java:
+    errors.append('MainActivity version label is not V5.2.29')
+if 'V5.2.29' not in workflow_root or 'V5.2.29' not in workflow_monitor:
+    errors.append('workflow version label is not V5.2.29')
+if 'DanzKu-Monitor-V5.2.29-debug' not in workflow_root or 'DanzKu-Monitor-V5.2.29-debug' not in workflow_monitor:
+    errors.append('workflow artifact name is not V5.2.29')
 
 
 
@@ -159,8 +172,8 @@ for forbidden in ['sched_setaffinity', 'setpriority(', '/sys/class/devfreq', '/s
     if forbidden.lower() in src.lower():
         errors.append(f'forbidden performance/system implementation token present: {forbidden}')
 
-if 'version=5.2.27' not in prop or 'versionCode=527' not in prop:
-    errors.append('module.prop is not V5.2.27/versionCode 527')
+if 'version=5.2.29' not in prop or 'versionCode=529' not in prop:
+    errors.append('module.prop is not V5.2.29/versionCode 529')
 if 'android-29' not in workflow or 'arm64-v8a' not in workflow:
     errors.append('workflow target ABI/API mismatch')
 

@@ -1,20 +1,28 @@
+DanzKu Visual Shader V5.2.29 — SS Zoom Fix Validation
+
+Fix scope:
+- After True Supersampling resolve, explicitly bind GL_DRAW_FRAMEBUFFER=0.
+- After True Supersampling resolve, explicitly bind GL_READ_FRAMEBUFFER=0.
+- Restore viewport to actual EGL surface dimensions before downstream V40 processing.
+- Restore original GL_SCISSOR_TEST enable state before the downstream handoff.
+- Add ss_downstream_handoff_ok / ss_downstream_handoff_fail telemetry.
+- Add source validation guards for the downstream handoff invariant.
+- Bump module + monitor metadata to V5.2.29 / versionCode 529.
+
+Automated validation run:
 VALIDATION=PASS
 source=clean
-config_keys=46
+config_keys=94
 v5_features=advanced_aa,shadow,ao,specular,reflection,lighting,effects
 stale_v32_tokens=0
-monitor_bridge_quote_fix=PASS
-monitor_config_editor_present=PASS
-monitor_native_bridge_paths=/data/local/tmp/danzku_visual_config,/data/local/tmp/danzku_visual_engine
-native_rendering_source_changed=NO
-local_android_gradle_build=NOT_AVAILABLE
+stage1_color_texture_masters=PASS
+stage1_bypass_gates=PASS
 
-STAGE1_FOLLOWUP
-color_master_ui=PASS
-texture_master_ui=PASS
-color_master_native_config_report=PASS
-texture_master_native_config_report=PASS
-visual_proof_bypass_new_family_uniform_gates=PASS
-native_build=NOT_RUN
-android_apk_build=NOT_RUN
-runtime_visual_verification=NOT_RUN
+Build status:
+- Android NDK/CMake build was NOT executed in this container because an Android NDK toolchain is not installed here.
+- The GitHub Actions workflow remains configured to build arm64-v8a with Android API 29 and NDK 27.2.12479018.
+
+Expected runtime invariant on device:
+- ss_downstream_handoff_ok increases with successful SS resolves.
+- ss_downstream_handoff_fail remains 0.
+- V40's read framebuffer should be 0 at the start of v27_process_frame() after SS resolve.

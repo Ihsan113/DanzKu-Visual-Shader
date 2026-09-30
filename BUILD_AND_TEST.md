@@ -40,7 +40,7 @@ cmake --build build --config Release -j$(nproc)
 
 Kalau mau lewat GitHub Actions saja: push branch ini, workflow
 `shader-module` otomatis jalan dan hasil ZIP-nya ada di artifact
-`DanzKu-Visual-Shader-v5.2.26-install`.
+`DanzKu-Visual-Shader-v5.2.29-install`.
 
 ## 2. Susun paket Magisk (kalau build manual, bukan lewat CI)
 
@@ -55,12 +55,12 @@ cp module/uninstall.sh dist/danzku_visual_shader/uninstall.sh
 cp module/config/visual.conf dist/danzku_visual_shader/config/visual.conf
 cp module/config/targets.conf dist/danzku_visual_shader/config/targets.conf
 chmod 0755 dist/danzku_visual_shader/service.sh dist/danzku_visual_shader/uninstall.sh
-cd dist && zip -r DanzKu-Visual-Shader-v5.2.26-INSTALL.zip danzku_visual_shader
+cd dist && zip -r DanzKu-Visual-Shader-v5.2.29-INSTALL.zip danzku_visual_shader
 ```
 
 ## 3. Instal di POCO M5
 
-1. Pindahkan `DanzKu-Visual-Shader-v5.2.26-INSTALL.zip` ke HP (adb push atau
+1. Pindahkan `DanzKu-Visual-Shader-v5.2.29-INSTALL.zip` ke HP (adb push atau
    Termux `cp` kalau sudah di HP).
 2. Buka Magisk → Modules → Install from storage → pilih ZIP itu.
 3. **Reboot** (wajib, supaya Zygisk memuat modul baru sebelum
@@ -136,14 +136,11 @@ Baca urutan ini, bukan cuma `ss_state`:
 Kalau butuh screenshot/video pembanding tajam vs blur, bandingkan game
 berjalan dengan `true_supersampling=0` vs `1` di config yang sama.
 
-**Khusus v5.2.27**: ada fix buat bug zoom persisten (bukan crop) yang
-kejadian di layar tertentu — misal layar preview hero/skin — pas
-`supersampling_scale` di atas 1x. Kalau sebelumnya pernah ngalamin ini,
-buka lagi PERSIS layar yang sama dengan scale di atas 1x, dan bandingkan.
-Zoom-nya harusnya udah hilang; kalau masih kejadian, itu tandanya
-mekanismenya beda dari yang diduga (lihat `STAGE3_IMPLEMENTATION_NOTES.txt`
-bagian 0.2) dan perlu telemetry baru buat gali lebih lanjut — jangan lupa
-tetap jalanin `su -c cat .../danzku_ss_<PID>.txt` biar ada data pembanding.
+**Khusus v5.2.29**: ada perbaikan pada handoff framebuffer setelah True Supersampling resolve. Sebelumnya V40 dapat membaca kembali FBO supersampled dan meregangkan sebagian area menjadi zoom yang mengikuti nilai scale. Kini setelah resolve, READ dan DRAW dipaksa kembali ke FB 0 serta viewport dikembalikan ke ukuran surface sebelum V40 memproses frame.
+
+Perubahan ini ditambah telemetry `ss_downstream_handoff_ok` / `ss_downstream_handoff_fail` untuk verifikasi di perangkat. Pada kondisi normal, `ss_downstream_handoff_ok` bertambah saat SS resolve sukses dan `ss_downstream_handoff_fail` tetap 0.
+
+Tes perangkat tetap diperlukan karena build Android/driver nyata belum dijalankan di container ini.
 
 ## 6. Build & pasang Monitor APK (opsional, buat toggle/slider + status dari HP)
 

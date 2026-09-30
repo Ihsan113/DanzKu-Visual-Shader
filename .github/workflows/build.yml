@@ -1,4 +1,4 @@
-name: Build DanzKu V5.2.27 + Monitor V5.2.27
+name: Build DanzKu V5.2.29 + Monitor V5.2.29
 
 on:
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
       - name: Upload Monitor APK
         uses: actions/upload-artifact@v4
         with:
-          name: DanzKu-Monitor-V5.2.27-debug
+          name: DanzKu-Monitor-V5.2.29-debug
           path: monitor/app/build/outputs/apk/debug/app-debug.apk
 
   shader-module:
@@ -71,11 +71,11 @@ jobs:
           cp module/config/targets.conf dist/danzku_visual_shader/config/targets.conf
           chmod 0755 dist/danzku_visual_shader/service.sh dist/danzku_visual_shader/uninstall.sh
           cd dist
-          zip -r DanzKu-Visual-Shader-v5.2.27-INSTALL.zip danzku_visual_shader
-          unzip -t DanzKu-Visual-Shader-v5.2.27-INSTALL.zip
-          sha256sum DanzKu-Visual-Shader-v5.2.27-INSTALL.zip
+          zip -r DanzKu-Visual-Shader-v5.2.29-INSTALL.zip danzku_visual_shader
+          unzip -t DanzKu-Visual-Shader-v5.2.29-INSTALL.zip
+          sha256sum DanzKu-Visual-Shader-v5.2.29-INSTALL.zip
       - name: Upload shader ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DanzKu-Visual-Shader-v5.2.27-install
-          path: dist/DanzKu-Visual-Shader-v5.2.27-INSTALL.zip
+          name: DanzKu-Visual-Shader-v5.2.29-install
+          path: dist/DanzKu-Visual-Shader-v5.2.29-INSTALL.zip

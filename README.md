@@ -52,6 +52,10 @@ V5.2.16 is diagnostic-only: it does not accept the 1902x853 viewport automatical
 BUILD-FIX NOTE: Removed glGetTexLevelParameteriv because Android GLES headers/API do not provide that GLES2 call. Texture attachment dimensions remain 0/unknown; FBO status/type/name diagnostics are retained.
 
 
+
+### V5.2.29 True SS/V40 framebuffer handoff fix
+After True Supersampling resolves the supersampled render target into the real EGL default framebuffer, the downstream V40 pass is explicitly handed FB 0 for both READ and DRAW, with the viewport reset to the actual EGL surface size. This prevents a supersampled source FBO from being re-read as a partial source and stretched back to the display, the mechanism that produced scale-proportional zoom.
+
 ### V5.2.26 viewport handling
 V5.2.26 addresses the verified V5.2.16 skip condition without replacing the proven Direct GOT eglSwapBuffers hook. Exact viewport dimensions continue through the original path. A smaller viewport is processed only under strict geometry/surface/aspect checks; rejected viewports remain skipped.
 

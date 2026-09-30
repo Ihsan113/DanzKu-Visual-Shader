@@ -379,3 +379,15 @@ Supersampling status" section. See CHANGELOG.md and
 monitor/app/src/main/java/APK_UI_RUNTIME_FIX_NOTES.txt for what changed
 there specifically.
 
+
+
+V5.2.29 True SS/V40 handoff fix
+--------------------------------
+After True Supersampling resolves the high-resolution FBO into the real EGL
+default framebuffer, the swap hook immediately runs the V40 post-process stage.
+The SS resolve path now explicitly binds both READ and DRAW to framebuffer 0 and
+sets the viewport to the actual EGL surface dimensions before V40 reads the frame.
+This prevents V40 from sampling the supersampled source FBO and stretching a
+partial source rectangle back to the display, which produced zoom proportional to
+the SS scale. Runtime telemetry exposes `ss_downstream_handoff_ok` and
+`ss_downstream_handoff_fail` so the invariant can be verified on-device.

@@ -1,4 +1,4 @@
-# DanzKu Visual Shader V5.2.28 — True Supersampling Zoom Diagnosis
+# DanzKu Visual Shader V5.2.29 — True Supersampling Zoom Diagnosis
 
 This build is intended to **measure the existing True Supersampling path without changing its rendering math**. The goal is to separate four possible causes of the scale-dependent zoom:
 
@@ -36,3 +36,12 @@ A `ss_resolve_ok` increment by itself does **not** prove every game draw was int
 ## Important
 
 This is a diagnostic build, not a final zoom fix. The source intentionally does not change the SS scale transform, resolve algorithm, framebuffer dimensions, or game-visible viewport policy. The added instrumentation is sampled rather than written on every GL call to limit overhead.
+
+
+## V5.2.29 True SS/V40 handoff check
+
+The critical invariant after True Supersampling resolve is that both GL_READ_FRAMEBUFFER
+and GL_DRAW_FRAMEBUFFER are 0 and the viewport equals the EGL surface size before V40
+processing. The runtime report exposes `ss_downstream_handoff_ok` and
+`ss_downstream_handoff_fail`; a healthy session should show the former increasing and
+the latter remaining 0.

@@ -1556,7 +1556,7 @@ public class MainActivity extends Activity {
 
     String buildStatusText() {
         String rootCheck = su("id");
-        if (!rootCheck.startsWith("uid=0")) return "DANZKU MONITOR V5.2.27\nROOT: FAILED\n" + rootCheck;
+        if (!rootCheck.startsWith("uid=0")) return "DANZKU MONITOR V5.2.29\nROOT: FAILED\n" + rootCheck;
         RuntimeState st = readRuntime();
         String config = configText();
         HashSet<String> targets = readTargetPackages();
@@ -1579,7 +1579,7 @@ public class MainActivity extends Activity {
         }
 
         if (!st.ready) {
-            final String text = "DANZKU MONITOR V5.2.27\n" +
+            final String text = "DANZKU MONITOR V5.2.29\n" +
                     "ROOT: OK\n" +
                     "TARGET: " + targetSummary + "\n" +
                     "ACTIVE APP: " + activeSummary + "\n" +
@@ -1594,7 +1594,7 @@ public class MainActivity extends Activity {
             return text;
         }
 
-        StringBuilder sb = new StringBuilder("DANZKU MONITOR V5.2.27\n");
+        StringBuilder sb = new StringBuilder("DANZKU MONITOR V5.2.29\n");
         sb.append("ROOT: OK\n");
         sb.append("TARGET: ").append(targetSummary).append("\n");
         sb.append("ACTIVE APP: ").append(activeSummary).append("\n");
@@ -1878,7 +1878,7 @@ public class MainActivity extends Activity {
         if(!overlayDetailMode){
             b.append("FPS ").append(fmt(render.fps));
         } else {
-            b.append("DANZKU V5.2.27\n");
+            b.append("DANZKU V5.2.29\n");
             if (lastRuntimePackage != null && lastRuntimePackage.length() > 0) {
                 b.append("APP ").append(appLabel(lastRuntimePackage)).append(" (").append(lastRuntimePackage).append(")\n");
             }
@@ -1911,7 +1911,7 @@ public class MainActivity extends Activity {
                     lastRuntimePackage="";
                     runOnUiThread(() -> {
                         if(overlayVisible && overlayText != null) {
-                            overlayText.setText("DANZKU V5.2.27\nFPS --");
+                            overlayText.setText("DANZKU V5.2.29\nFPS --");
                         }
                     });
                     return;

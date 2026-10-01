@@ -1180,7 +1180,7 @@ static bool v27_init(int width, int height) {
         "uniform float u_v12_motion_detail_preservation;"
         "varying vec2 vUV;"
         "float lum(vec3 c){return dot(c,vec3(0.2126,0.7152,0.0722));}"
-        "vec3 add_luma(vec3 c,float target){float y=max(lum(c),0.0001);return clamp(c*(target/y),vec3(0.0),vec3(1.0));}"
+        "vec3 add_luma(vec3 c,float target){float y=lum(c);float d=target-y;d*=mix(1.0,smoothstep(0.0,0.24,y),step(0.0,d));vec3 ad=c+vec3(d);vec3 mu=c*((y+d)/max(y,0.15));return clamp(mix(ad,mu,smoothstep(0.15,0.40,y)),vec3(0.0),vec3(1.0));}"
         "void main(){"
         " vec4 sampleC=texture2D(uTex,vUV);"
         " vec3 c=sampleC.rgb;"
@@ -1209,6 +1209,8 @@ static bool v27_init(int width, int height) {
         " vec3 wide2=texture2D(uTex,vUV-vec2(2.0*uTexel.x,2.0*uTexel.y)).rgb;"
         " vec3 wideAvg=0.5*(wide1+wide2);"
         " vec3 wideDetail=c-wideAvg;"
+        " float darkGate=mix(0.40,1.0,smoothstep(0.015,0.080,max(yC,yA)));"
+        " fineDetail*=darkGate; wideDetail*=darkGate;"
         " float localStrength=clamp(uLocalContrast,0.0,1.0);"
         " float localScale=1.0+localStrength*0.70*edgeMask;"
         " vec3 cur=c;"
@@ -1245,6 +1247,9 @@ static bool v27_init(int width, int height) {
         " aiDelta*=aiGhost*clamp(0.5+0.5*edgeMask,0.0,1.0);"
         " aiDelta+=fineDetail*clamp(u_ai_edge_sharpen,0.0,0.6)*edgeMask*aiBudget;"
         " if(aiOn>0.5){cur+=aiDelta*aiOn*spatial*runtimeQ;}"
+        " vec3 nMin=min(min(min(l,r),min(u,d)),c);"
+        " vec3 nMax=max(max(max(l,r),max(u,d)),c);"
+        " cur=clamp(cur,nMin-vec3(0.05),nMax+vec3(0.05));"
         " float aiHi=smoothstep(0.56,0.95,yC)*clamp(u_ai_highlight_reconstruction,0.0,1.0);"
         " float aiSh=1.0-smoothstep(0.07,0.46,yC);"
         " if(aiOn>0.5){cur=add_luma(cur,lum(cur)+aiSh*clamp(u_ai_shadow_recovery,0.0,1.0)*0.08*(1.0-lum(cur)));}"
@@ -1286,6 +1291,7 @@ static bool v27_init(int width, int height) {
         " vec3 a4=texture2D(uTex,vUV-vec2(0.0,anisStep.y)).rgb;"
         " vec3 anisoAvg=(a1+a2+a3+a4)*0.25;"
         " cur+=(cur-anisoAvg)*(0.50*aniso*smoothstep(0.003,0.10,length(cur-anisoAvg)))*runtimeQ;"
+        " cur=clamp(cur,nMin-vec3(0.14),nMax+vec3(0.14));"
         " vec3 h=texture2D(uHistoryTex,vUV*uHistoryScale).rgb;"
         " vec3 hl=texture2D(uHistoryTex,(vUV+vec2(-uTexel.x,0.0))*uHistoryScale).rgb;"
         " vec3 hr=texture2D(uHistoryTex,(vUV+vec2( uTexel.x,0.0))*uHistoryScale).rgb;"
@@ -1293,7 +1299,7 @@ static bool v27_init(int width, int height) {
         " vec3 hd=texture2D(uHistoryTex,(vUV+vec2(0.0,-uTexel.y))*uHistoryScale).rgb;"
         " vec3 hAvg=(hl+hr+hu+hd)*0.25;"
         " float hLum=lum(h);"
-        " float temporalDiff=abs(lum(cur)-hLum);"
+        " float temporalDiff=abs(yC-hLum);"
         " float localMotion=max(max(abs(yC-lum(h)),abs(lum(l)-lum(hl))),max(abs(lum(r)-lum(hr)),max(abs(lum(u)-lum(hu)),abs(lum(d)-lum(hd)))));"
         " float dH=abs(yC-lum(h));"
         " float dL=abs(yC-lum(hl));"
@@ -1316,7 +1322,7 @@ static bool v27_init(int width, int height) {
         " float recConf=mix(1.0,baseConf,clamp(uConfidence,0.0,1.0)*clamp(uConfidenceStrength,0.0,1.0));"
         " recConf*=mix(1.0,depthAgreement,clamp(u_v9_depth_proxy,0.0,1.0));"
         " float motionGate=mix(1.0,motionConf,clamp(uMotionAware,0.0,1.0));"
-        " float shimmer= smoothstep(u_v10_stability_threshold,max(u_v10_stability_threshold+u_v10_stability_softness,u_v10_stability_threshold+0.0001),temporalDiff+0.5*abs(length(cur-avg)-length(h-hAvg)));"
+        " float shimmer= smoothstep(u_v10_stability_threshold,max(u_v10_stability_threshold+u_v10_stability_softness,u_v10_stability_threshold+0.0001),temporalDiff+0.5*abs(length(c-avg)-length(h-hAvg)));"
         " float stableGate=mix(1.0,1.0-shimmer,clamp(u_v10_antishimmer,0.0,1.0)*clamp(u_v10_shimmer_strength,0.0,1.0));"
         " stableGate*=1.0-clamp(shimmer*edgeMask*clamp(u_v10_edge_protection,0.0,1.0),0.0,0.85);"
         " vec3 hMin=min(min(hl,hr),min(hu,hd));"
@@ -1324,9 +1330,9 @@ static bool v27_init(int width, int height) {
         " float clipMix=clamp(0.55*clamp(u_v9_history_clip,0.0,1.0)+0.45*clamp(u_v11_color_clip,0.0,1.0),0.0,1.0);"
         " vec3 clipH=clamp(reprojH,mix(vec3(0.0),hMin,clipMix),mix(vec3(1.0),hMax,clipMix));"
         " float historySpatial=length(h-hAvg);"
-        " float curSpatial=length(cur-avg);"
+        " float curSpatial=length(c-avg);"
         " float detailAgreement=1.0-smoothstep(u_v11_detail_threshold,max(u_v11_detail_threshold+u_v11_detail_softness,u_v11_detail_threshold+0.0001),abs(curSpatial-historySpatial));"
-        " float ghostSignal=smoothstep(0.010,0.10,length(cur-h)+0.30*temporalDiff);"
+        " float ghostSignal=smoothstep(0.010,0.10,length(c-h)+0.30*temporalDiff);"
         " float ghostGate=1.0-ghostSignal*clamp(u_v11_ghost_rejection,0.0,1.0);"
         " float responsive=clamp(u_v9_responsive,0.0,1.0)*clamp(u_v12_camera_motion,0.0,1.0);"
         " float motionLevel=smoothstep(u_v12_motion_threshold,max(u_v12_motion_threshold+u_v12_motion_softness,u_v12_motion_threshold+0.0001),localMotion);"
@@ -1340,16 +1346,17 @@ static bool v27_init(int width, int height) {
         " float recoveryMask=1.0-smoothstep(clamp(uRecoveryThreshold,0.001,0.5),max(clamp(uRecoveryThreshold,0.001,0.5)+0.04,0.045),temporalDiff);"
         " vec3 temporalHistory=mix(reprojH,clipH,clamp(u_v9_reprojection,0.0,1.0)*0.55);"
         " vec3 recoveredHistory=temporalHistory+(reprojH-hAvg)*clamp(uTemporalRecovery*uRecoveryStrength*0.35*recoveryMask,0.0,0.18);"
-        " vec3 temporalColor=mix(cur,recoveredHistory,v9Weight);"
+        " vec3 temporalColor=mix(c,recoveredHistory,v9Weight)+(cur-c);"
         " float motionDetailGate=mix(1.0,clamp(u_v12_motion_detail_preservation,0.0,1.0),motionLevel);"
         " temporalColor+=fineDetail*0.10*clamp(u_v11_detail_preservation,0.0,1.0)*motionDetailGate;"
-        " temporalColor=clamp(temporalColor,mix(c,vec3(0.0),0.35),mix(c,vec3(1.0),0.35));"
+        " temporalColor=clamp(temporalColor,c-vec3(0.10),c+vec3(0.16));"
         " float finalLum=lum(temporalColor);"
-        " vec3 sat=finalLum+(temporalColor-vec3(finalLum))*max(0.0,uSaturation);"
+        " float satW=smoothstep(0.02,0.14,finalLum);"
+        " vec3 sat=finalLum+(temporalColor-vec3(finalLum))*mix(1.0,max(0.0,uSaturation),satW);"
         " float vmax=max(max(temporalColor.r,temporalColor.g),temporalColor.b);"
         " float vmin=min(min(temporalColor.r,temporalColor.g),temporalColor.b);"
         " float chroma=max(vmax-vmin,0.0);"
-        " float vib=(1.0-smoothstep(0.02,0.85,chroma))*clamp(uVibrance,0.0,1.0);"
+        " float vib=(1.0-smoothstep(0.02,0.85,chroma))*clamp(uVibrance,0.0,1.0)*satW;"
         " vec3 color=finalLum+(sat-vec3(finalLum))*(1.0+vib);"
         " float hdrSh=1.0-smoothstep(0.06,0.44,lum(color));"
         " float hdrHi=smoothstep(0.58,0.94,lum(color));"
@@ -1358,9 +1365,11 @@ static bool v27_init(int width, int height) {
         " float hdrCompress=hdrHi*hdr*0.10;"
         " color=add_luma(color,lum(color)+hdrLift*(1.0-lum(color)));"
         " color=color/(1.0+hdrCompress*max(lum(color),0.001));"
-        " float chromaKeep=1.0+clamp(u_ai_luma_chroma,0.0,1.0)*0.20*aiOn;"
+        " float chromaKeep=1.0+clamp(u_ai_luma_chroma,0.0,1.0)*0.20*aiOn*smoothstep(0.02,0.14,lum(color));"
         " float yFinal=lum(color);"
         " color=yFinal+(color-vec3(yFinal))*chromaKeep;"
+        " float ign=fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(0.06711056,0.00583715))));"
+        " color+=vec3((ign-0.5)*(1.0/255.0));"
         " color=clamp(color,vec3(0.0),vec3(1.0));"
         " gl_FragColor=vec4(mix(c,color,clamp(uEnabled,0.0,1.0)),sampleC.a);"
         "}";
@@ -2341,22 +2350,16 @@ static bool v27_process_frame(EGLSurface surface) {
     glDisableVertexAttribArray((GLuint)g_v27_pos);
     glDisableVertexAttribArray((GLuint)g_v27_uv);
 
-    // Store the completed output as history for the next frame. This is skipped
-    // when temporal mode is disabled; baseline spatial behavior remains otherwise unchanged.
+    // Store the RAW captured frame as history for the next frame. Using the raw
+    // capture (not the enhanced output) prevents sharpen/shadow-lift feedback from
+    // accumulating artifacts across frames. Skipped when temporal mode is disabled.
     GLenum history_err = GL_NO_ERROR;
-    if (draw_err == GL_NO_ERROR && g_v28_temporal_value && g_v28_history_fbo) {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(old_draw_fbo));
+    if (draw_err == GL_NO_ERROR && g_v28_temporal_value && g_v28_history_fbo && g_v27_fbo) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, g_v27_fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_v28_history_fbo);
-        if (output_stage_candidate) {
-            g_v27_blit_framebuffer(0, 0, g_v27_width, g_v27_height,
-                                   0, 0, g_v28_history_width, g_v28_history_height,
-                                   GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        } else {
-            g_v27_blit_framebuffer(viewport[0], viewport[1],
-                                   viewport[0] + viewport[2], viewport[1] + viewport[3],
-                                   0, 0, g_v28_history_width, g_v28_history_height,
-                                   GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        }
+        g_v27_blit_framebuffer(0, 0, g_v27_width, g_v27_height,
+                               0, 0, g_v28_history_width, g_v28_history_height,
+                               GL_COLOR_BUFFER_BIT, GL_NEAREST);
         history_err = glGetError();
         if (history_err == GL_NO_ERROR) g_v28_history_valid = true;
         else {

@@ -1,3 +1,16 @@
+# Stable-Max patch (V5.3.1) — fix visual pecah/berpiksel di area gelap + profil Max seimbang
+
+- Akar masalah: `add_luma()` mengalikan warna dengan `target/luma` (dibagi luma yang bisa mendekati 0). Di bayangan, noise kuantisasi 8-bit (selisih 1 level per kanal) jadi diperbesar belasan kali, lalu dirantai oleh local contrast, shadow refine, AI shadow recovery, shadow enhancement dan HDR lift. Hasilnya blok/dither biru-teal-hijau di area gelap dan cincin kontur di gradien.
+- `add_luma()` sekarang aditif di bayangan (tanpa pembagian), dengan jangkar hitam (hitam murni tetap hitam, angkatan naik halus sampai luma 0.24) dan beralih ke rasio terbatas di mid/highlight.
+- Gate noise gelap (`darkGate`) pada fine/wide detail: noise di area sangat gelap tidak ikut dipertajam.
+- Clamp tetangga anti-ringing setelah injeksi detail (+/-0.05) dan clamp longgar setelah aniso/texture (+/-0.14).
+- Clamp temporal diganti dari `[0.65c, 0.65c+0.35]` menjadi `[c-0.10, c+0.16]`.
+- History sekarang disalin dari frame mentah (`g_v27_fbo`), bukan dari output yang sudah dipertajam, sehingga tidak ada feedback sharpen/lift antar frame. Temporal menstabilkan base mentah, sedangkan delta enhancement tetap dari frame saat ini (detail tidak ikut terhapus).
+- Saturation, vibrance dan chroma dikunci oleh luma (`satW`) supaya noise gelap tidak berwarna.
+- Dither IGN +/-0.5/255 sebelum output 8-bit untuk memecah banding.
+- Profil Stable-Max: nilai `visual.conf` dan preset RECOMMENDED di APK dinaikkan seimbang (sharpen 0.40, clarity 0.22, AO 0.34, aniso 8, temporal 0.30, dst).
+- Butuh rebuild native (.so) dan APK; `visual.conf` saja tidak cukup.
+
 # Monitor APK patch (V5.3.0) — FPS overlay via root (tanpa hook) + fix panel TUNE kepotong
 
 - FPS overlay sekarang dibaca langsung oleh APK lewat root: `dumpsys SurfaceFlinger --latency <layer>` (layer game dicari otomatis dari `--list`). Tidak butuh hook `eglSwapBuffers` / modul aktif. Hook hanya jadi fallback kalau SurfaceFlinger tidak memberi data; sumbernya ditampilkan di Detail (`Src`).

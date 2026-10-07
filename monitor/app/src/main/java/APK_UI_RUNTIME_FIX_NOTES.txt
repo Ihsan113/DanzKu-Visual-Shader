@@ -27,3 +27,4 @@ DanzKu Monitor APK UI/runtime status fix
   Version bumped 5.2.26 -> 5.2.27 (build.gradle + every "V5.2.26" status
   label) alongside the matching native module.prop bump, so an updated
   build is visibly distinguishable from the one that showed the bug.
+- V5.3.0 runtime reader follow-up: process discovery now prefers `pidof <package>` and falls back to `ps`, then checks every returned PID for a matching v40 runtime report. The reader also retries through plain `su -c` when the mount-master shell returns an empty process view, and it checks the common `/data/user/0`, `/data/data`, and `/data/user_de/0` report paths. This is specifically intended to fix Android 13/KernelSU/Magisk cases where the target process is visible to root but the Monitor's previous `ps`/`su -mm` combination reported `PID FOUND: NO`. Native hook code is unchanged by this follow-up.

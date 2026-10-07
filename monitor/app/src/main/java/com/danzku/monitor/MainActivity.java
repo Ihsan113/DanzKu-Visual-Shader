@@ -1616,49 +1616,67 @@ public class MainActivity extends Activity {
         diagPid=false; diagReport=false; diagRead=false; diagPidMatch=false; diagStage=false;
         diagError="";
 
-        // Resolve the active target dynamically. A package can have multiple
-        // Android processes (for example com.mobile.legends and
-        // package:process). The old implementation selected
-        // the first PID returned by ps and then checked only that PID's report.
-        // That made MLBB show "PID FOUND" but "REPORT FOUND: NO" when the
-        // renderer lived in a different process. Prefer a runtime report whose
-        // PID matches the actual target process, and fall back to the first
-        // matching process only when no report exists yet.
+        // Resolve the active target dynamically. Prefer Android's pidof because
+        // some Android 13/KernelSU combinations expose app processes differently
+        // through `ps`. Fall back to ps when pidof is unavailable or empty. Once a
+        // package has multiple PIDs, inspect every PID for the matching runtime
+        // report instead of assuming the first process owns the renderer.
         String command =
                 "TARGETS=\"" + TARGETS + "\"; " +
-                "FOUND_PID=\"\"; FOUND_PKG=\"\"; FOUND_REPORT=\"\"; " +
+                "FOUND_PID=\"\"; FOUND_PKG=\"\"; FOUND_REPORT=\"\"; FOUND_VALID=0; " +
                 "if [ -r \"$TARGETS\" ]; then " +
                 "while IFS= read -r PKG; do " +
                 "case \"$PKG\" in ''|\\#*) continue;; esac; " +
                 "case \"$PKG\" in *[!A-Za-z0-9_.]*) continue;; esac; " +
-                "for PID in $(ps -A -o PID,NAME 2>/dev/null | awk -v p=\"$PKG\" '$2==p || index($2,p\":\")==1 {print $1}'); do " +
+                "PIDS=\"$(pidof \"$PKG\" 2>/dev/null)\"; " +
+                "if [ -z \"$PIDS\" ]; then PIDS=\"$(ps -A -o PID,NAME 2>/dev/null | awk -v p=\"$PKG\" '$2==p || index($2,p\":\")==1 {print $1}')\"; fi; " +
+                "for PID in $PIDS; do " +
+                "case \"$PID\" in ''|*[!0-9]*) continue;; esac; " +
                 "if [ -z \"$FOUND_PID\" ]; then FOUND_PID=\"$PID\"; FOUND_PKG=\"$PKG\"; fi; " +
-                "R=\"/data/user/0/$PKG/files/danzku_v40_runtime_${PID}.txt\"; " +
+                "for R in \"/data/user/0/$PKG/files/danzku_v40_runtime_${PID}.txt\" \"/data/data/$PKG/files/danzku_v40_runtime_${PID}.txt\" \"/data/user_de/0/$PKG/files/danzku_v40_runtime_${PID}.txt\"; do " +
                 "if [ -f \"$R\" ]; then " +
+                "if [ -z \"$FOUND_REPORT\" ]; then FOUND_REPORT=\"$R\"; fi; " +
                 "RPID=$(grep '^pid=' \"$R\" 2>/dev/null | head -n 1 | cut -d= -f2-); " +
                 "STAGE=$(grep '^stage=' \"$R\" 2>/dev/null | head -n 1 | cut -d= -f2-); " +
                 "if [ \"$RPID\" = \"$PID\" ] && [ \"$STAGE\" = \"v40_runtime\" ]; then " +
-                "FOUND_PID=\"$PID\"; FOUND_PKG=\"$PKG\"; FOUND_REPORT=\"$R\"; break 2; fi; " +
+                "FOUND_PID=\"$PID\"; FOUND_PKG=\"$PKG\"; FOUND_REPORT=\"$R\"; FOUND_VALID=1; break; fi; " +
                 "fi; " +
                 "done; " +
+                "if [ \"$FOUND_VALID\" = 1 ]; then break; fi; " +
+                "done; " +
+                "if [ \"$FOUND_VALID\" = 1 ]; then break; fi; " +
                 "done < \"$TARGETS\"; fi; " +
                 "echo __DANZKU_PID__=$FOUND_PID; " +
                 "echo __DANZKU_PACKAGE__=$FOUND_PKG; " +
                 "if [ -n \"$FOUND_REPORT\" ]; then echo __DANZKU_REPORT__=$FOUND_REPORT; cat \"$FOUND_REPORT\"; fi";
         SuResult result = runSu(command);
+        // `su -mm` can be healthy while exposing a different process/mount view.
+        // If the master shell produced no PID at all, retry this read explicitly
+        // through the normal root shell instead of accepting an empty successful
+        // result as authoritative. This keeps config writes untouched while making
+        // runtime process discovery robust on KernelSU/Magisk variants.
+        String firstOutput = result.output == null ? "" : result.output.trim();
+        if (firstOutput.contains("__DANZKU_PID__=\n") || !firstOutput.contains("__DANZKU_PACKAGE__=")) {
+            SuResult normal = runSuProcess(new String[]{"su", "-c", command});
+            String normalOutput = normal.output == null ? "" : normal.output.trim();
+            if (normalOutput.length() > 0 || normal.error.length() > 0 || normal.timedOut) {
+                result = normal;
+            }
+        }
         String output = result.output == null ? "" : result.output.trim();
 
         String pid = "";
         String packageName = "";
         String report = "";
-        for (String line : output.split("\n")) {
+        boolean reportMarker = false;
+        for (String line : output.split("\\n")) {
             if (line.startsWith("__DANZKU_PID__=")) {
                 pid=line.substring("__DANZKU_PID__=".length()).trim();
             } else if (line.startsWith("__DANZKU_PACKAGE__=")) {
                 packageName=line.substring("__DANZKU_PACKAGE__=".length()).trim();
             } else if (line.startsWith("__DANZKU_REPORT__=")) {
-                // Path is informational; the report body follows.
-            } else if (!line.startsWith("ERROR:") && line.length() > 0) {
+                reportMarker = true;
+            } else if (!line.startsWith("ERROR:") && (reportMarker || line.startsWith("stage=") || line.startsWith("pid="))) {
                 report += line + "\n";
             }
         }

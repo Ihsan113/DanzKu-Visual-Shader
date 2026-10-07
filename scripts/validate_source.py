@@ -145,6 +145,23 @@ if 'DanzKu-Monitor-V5.3.0-debug' not in workflow_root or 'DanzKu-Monitor-V5.3.0-
 
 
 
+# Generic EGL owner discovery checks.
+for token in [
+    'ctx.app_scope = true;',
+    'ctx.symbol_name = "eglSwapBuffers";',
+    'ctx.expected_library_basename = "libEGL.so";',
+    'engine_library_name=',
+    'engine_library_path=',
+    'engine_library_patched=',
+    'mprotect(reinterpret_cast<void*>(page), static_cast<size_t>(page_size), old_prot)',
+]:
+    if token not in src:
+        errors.append(f'missing generic EGL owner resolver token: {token}')
+if 'ctx.library_name = "libunity.so"' in src:
+    errors.append('egl resolver is still hard-coded to libunity.so')
+if 'com.miHoYo.GenshinImpact' in src:
+    errors.append('native source contains package-specific Genshin mapping')
+
 # Target package manager / dynamic monitor checks.
 targets_cfg = (root / 'module/config/targets.conf').read_text()
 service_src = (root / 'module/service.sh').read_text()

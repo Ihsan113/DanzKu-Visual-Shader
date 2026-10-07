@@ -72,3 +72,10 @@ V5.2.26 addresses the verified V5.2.16 skip condition without replacing the prov
 - `service.sh` bootstraps the default target list only when the target file is missing/empty/invalid, then preserves APK-managed changes.
 - The Monitor APK resolves active PID/runtime data from the selected package list and displays the active app dynamically.
 - Target Apps accepts both installed launchable apps and manual package-name input.
+
+
+## V5.3.0 — Generic EGL hook ownership
+
+The native `eglSwapBuffers` bootstrap is target-whitelist-gated and library-name agnostic. After a package passes `config/targets.conf`, the module inspects the target process's loaded application ELF objects and finds the object that imports `eglSwapBuffers` through an AArch64 dynamic relocation. This supports `libunity.so`, `libyuanshen.so`, and future renderer library names without a package-to-library table.
+
+The runtime report records `engine_library_name` and `engine_library_path` so the actual owner discovered on-device can be verified instead of inferred from the package name.

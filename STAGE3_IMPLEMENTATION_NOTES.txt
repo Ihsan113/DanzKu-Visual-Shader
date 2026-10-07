@@ -225,6 +225,48 @@ engine's logic no longer has this failure mode, not that this was the only
 mechanism behind the reported zoom.
 
 ====================================================================
+0.3 GENERIC EGL OWNER DISCOVERY (V5.3.0 runtime resolver hardening)
+====================================================================
+The `eglSwapBuffers` hook no longer assumes that the target application uses
+`libunity.so`. The target package is still selected exclusively by
+`config/targets.conf` in `preAppSpecialize()`. Only after that gate succeeds,
+the native worker scans the currently loaded application ELF objects and looks
+for a dynamic relocation importing the exact symbol `eglSwapBuffers`.
+
+Selection rules:
+  * `libunity.so`, `libyuanshen.so`, or any other engine/library name is NOT
+    selected from the package name.
+  * Candidate objects must be mapped from application locations such as
+    `/data/app/`, `/data/user/`, `/data/data/`, or `/mnt/expand/`.
+  * The resolver accepts `R_AARCH64_JUMP_SLOT` and `R_AARCH64_GLOB_DAT`
+    relocations from both `DT_JMPREL` and `DT_RELA`.
+  * For the `eglSwapBuffers` bootstrap, the current GOT value must already
+    resolve to the discovered `libEGL.so` implementation (or equal the
+    resolved `dlsym()` address). This avoids capturing a lazy-linker resolver
+    trampoline as the original function.
+  * All matching resolved app-scope GOT slots are patched, while the first
+    valid original function pointer is retained for the real swap call.
+  * The GOT page is made writable only for the patch and its original mapping
+    protection is restored afterward.
+
+This is what allows the same module binary to support a Unity title
+(`libunity.so`), a custom engine such as the observed Genshin renderer
+(`libyuanshen.so`), or a different future renderer library without adding a
+package-specific `if` branch.
+
+The runtime report exposes:
+    engine_library=YES/NO
+    engine_library_name=<discovered ELF basename>
+    engine_library_path=<loaded ELF path>
+    engine_library_candidates=<resolved matching relocation count>
+    engine_library_patched=<successfully redirected slot count>
+
+`engine_library` here means "the loaded application ELF that owns the
+`eglSwapBuffers` import used to bootstrap the hook"; it is telemetry naming,
+not a claim that every such ELF is literally the game's engine.
+
+
+====================================================================
 2. WHAT IS *NOT* CLAIMED
 ====================================================================
 * Compatibility with any game other than Mobile Legends (com.mobile.legends)

@@ -1,5 +1,12 @@
 # Stable-Max patch (V5.3.1) — fix visual pecah/berpiksel di area gelap + profil Max seimbang
 
+### Runtime resolver hardening (V5.3.0 source package)
+- Generic EGL owner discovery: `eglSwapBuffers` is now located from the target process's loaded application ELF relocations instead of hard-coding `libunity.so` or a package-to-library mapping.
+- Target Apps whitelist remains the injection gate; generic discovery only scans app-mapped ELF paths after a package has passed that gate.
+- The resolver records the discovered library name/path and patches all matching, already-resolved `eglSwapBuffers` GOT slots in the target app scope.
+- GOT page protection is restored after each patch when possible, preserving the original RELRO/RX/RW mapping.
+- Runtime telemetry now exposes `engine_library`, `engine_library_name`, `engine_library_path`, `engine_library_candidates`, and `engine_library_patched`.
+
 - Akar masalah: `add_luma()` mengalikan warna dengan `target/luma` (dibagi luma yang bisa mendekati 0). Di bayangan, noise kuantisasi 8-bit (selisih 1 level per kanal) jadi diperbesar belasan kali, lalu dirantai oleh local contrast, shadow refine, AI shadow recovery, shadow enhancement dan HDR lift. Hasilnya blok/dither biru-teal-hijau di area gelap dan cincin kontur di gradien.
 - `add_luma()` sekarang aditif di bayangan (tanpa pembagian), dengan jangkar hitam (hitam murni tetap hitam, angkatan naik halus sampai luma 0.24) dan beralih ke rasio terbatas di mid/highlight.
 - Gate noise gelap (`darkGate`) pada fine/wide detail: noise di area sangat gelap tidak ikut dipertajam.

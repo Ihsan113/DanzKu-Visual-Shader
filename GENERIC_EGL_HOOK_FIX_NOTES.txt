@@ -1,0 +1,26 @@
+DanzKu Visual Shader V5.3.0 — Generic EGL owner resolver fix
+
+Implemented:
+1. Target Apps whitelist remains the injection boundary in preAppSpecialize().
+2. eglSwapBuffers bootstrap no longer hard-codes libunity.so and does not map
+   package names to specific engine libraries.
+3. After the target gate passes, the worker scans loaded application ELF objects
+   from /data/app/, /data/user/, /data/data/, and /mnt/expand/.
+4. It locates eglSwapBuffers through AArch64 JUMP_SLOT/GLOB_DAT relocations in
+   DT_JMPREL and DT_RELA.
+5. For the swap bootstrap, candidate GOT values must already resolve to
+   libEGL.so (or the exact dlsym-resolved eglSwapBuffers address).
+6. All accepted app-scope eglSwapBuffers GOT slots are patched; the first
+   original pointer is retained for the real swap call.
+7. GOT page protections are restored after each patch when possible.
+8. Runtime telemetry now reports engine_library, engine_library_name,
+   engine_library_path, engine_library_candidates, and engine_library_patched.
+9. Existing Monitor APK runtime-reader changes from the supplied ZIP are kept.
+
+Validation:
+- scripts/validate_source.py: VALIDATION=PASS
+- Android NDK/SDK is not installed in this container, so no real arm64-v8a
+  native build or installable Magisk/Monitor APK build was produced here.
+- On-device validation is still required, especially for any renderer whose
+  eglSwapBuffers import is lazy/unusual or does not use a standard AArch64
+  dynamic relocation.

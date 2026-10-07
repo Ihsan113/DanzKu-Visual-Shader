@@ -211,6 +211,14 @@ static EglSwapBuffersFn g_orig_eglSwapBuffers = nullptr;
 static volatile unsigned long long g_hook_calls = 0;
 static volatile bool g_hook_installed = false;
 
+// Generic EGL hook ownership telemetry. The owner is discovered from the ELF
+// relocation that actually imports eglSwapBuffers inside an already-approved
+// target process; it is never selected from the package name.
+static std::string g_swap_owner_library;
+static std::string g_swap_owner_path;
+static unsigned g_swap_owner_candidates = 0;
+static unsigned g_swap_owner_patched = 0;
+
 // V5.2 frame telemetry: read-only measurement around the proven eglSwapBuffers hook.
 // This does not alter frame pacing, refresh rate, GPU clocks, or SurfaceFlinger.
 static pthread_mutex_t g_fps_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -1837,6 +1845,11 @@ static void v27_write_runtime_report() {
     out += "last_read_fbo_status=" + std::to_string((int)g_v27_last_read_fbo_status) + "\n";
     out += "last_fbo_diag_error=" + std::to_string((unsigned int)g_v27_last_fbo_diag_error) + "\n";
     out += "hook_calls=" + std::to_string((unsigned long long)g_hook_calls) + "\n";
+    out += "engine_library=" + std::string(g_swap_owner_library.empty() ? "NO" : "YES") + "\n";
+    out += "engine_library_name=" + g_swap_owner_library + "\n";
+    out += "engine_library_path=" + g_swap_owner_path + "\n";
+    out += "engine_library_candidates=" + std::to_string(g_swap_owner_candidates) + "\n";
+    out += "engine_library_patched=" + std::to_string(g_swap_owner_patched) + "\n";
     out += "process_calls=" + std::to_string((unsigned long long)g_v27_process_calls) + "\n";
     out += "process_success=" + std::to_string((unsigned long long)g_v27_process_success) + "\n";
     out += "skip_telemetry_version=1\n";
@@ -2607,51 +2620,10 @@ static std::string hex_ptr(const void* p) {
     return b;
 }
 
-static bool parse_map_identity(const char* needle, dev_t& dev, ino_t& ino, std::string& path) {
-    int fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return false;
-    std::string pending;
-    char buf[8192];
-    ssize_t n;
-    while ((n = read(fd, buf, sizeof(buf))) > 0) {
-        pending.append(buf, static_cast<size_t>(n));
-        size_t pos = 0;
-        while (true) {
-            size_t nl = pending.find('\n', pos);
-            if (nl == std::string::npos) {
-                pending.erase(0, pos);
-                break;
-            }
-            std::string line = pending.substr(pos, nl - pos);
-            pos = nl + 1;
-            if (line.find(needle) == std::string::npos) continue;
-
-            unsigned long long map_start = 0, map_stop = 0, offset = 0, inode = 0;
-            unsigned int maj = 0, min = 0;
-            char perms[8] = {};
-            int consumed = 0;
-            int got = sscanf(line.c_str(), "%llx-%llx %7s %llx %x:%x %llu %n",
-                             &map_start, &map_stop, perms, &offset,
-                             &maj, &min, &inode, &consumed);
-            if (got != 7 || consumed <= 0) continue;
-            std::string rest = line.substr(static_cast<size_t>(consumed));
-            while (!rest.empty() && (rest[0] == ' ' || rest[0] == '\t')) rest.erase(rest.begin());
-            if (rest.empty() || strstr(perms, "r-x") == nullptr) continue;
-            if (rest.find(needle) == std::string::npos) continue;
-            dev = makedev(maj, min);
-            ino = static_cast<ino_t>(inode);
-            path = rest;
-            close(fd);
-            return true;
-        }
-    }
-    close(fd);
-    return false;
-}
-
-
 // Stage 3: eglGetProcAddress / dlsym interception. Both are forwarded to the real
 // implementation first; only the GLES entry points handled by danzku_ss.cpp are replaced.
+// These GOT hooks use the same target-app-scoped generic ELF relocation discovery
+// as eglSwapBuffers; no package-specific engine library is required.
 static __eglMustCastToProperFunctionPointerType hooked_eglGetProcAddress(const char* name) {
     if (!g_orig_eglGetProcAddress) return nullptr;
     __atomic_add_fetch(&g_egl_get_proc_calls, 1ULL, __ATOMIC_RELAXED);
@@ -2675,26 +2647,188 @@ static void* hooked_dlsym(void* handle, const char* name) {
 }
 
 struct GotPatchContext {
+    // If library_name is non-null, restrict discovery to that exact basename.
+    // If app_scope is true, scan all ELF objects belonging to the already-approved
+    // application process. These selectors are mutually exclusive in normal use.
     const char* library_name;
+    bool app_scope;
+
     const char* symbol_name;
     void* replacement;
     void** original_out;
+
+    // Optional resolved implementation used only to reject an unresolved lazy
+    // binding. For eglSwapBuffers we wait until the GOT value points at libEGL
+    // (or equals this exact address), which keeps the captured original callable.
+    void* expected_original;
+    const char* expected_library_basename;
+
     void* found_got;
     void* found_original;
     void* value_after_patch;
     uintptr_t base;
     const char* path;
+
+    unsigned candidate_count;
+    unsigned patched_count;
+    unsigned patch_failures;
+    unsigned protection_restore_failures;
+    bool patch_all;
     bool success;
     const char* error;
+
+    std::string first_library_name;
+    std::string first_library_path;
 };
+
+static const char* path_basename(const char* path) {
+    if (!path || !*path) return "";
+    const char* slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+static bool is_app_library_path(const char* path) {
+    if (!path || !*path) return false;
+    // Keep the target whitelist as the security boundary: this resolver only
+    // scans libraries mapped from app-private/application APK locations.
+    return strstr(path, "/data/app/") != nullptr ||
+           strstr(path, "/data/user/") != nullptr ||
+           strstr(path, "/data/data/") != nullptr ||
+           strstr(path, "/mnt/expand/") != nullptr;
+}
+
+static bool map_protection_for_address(uintptr_t address, int* protection_out) {
+    if (!protection_out) return false;
+    const long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0) return false;
+    const uintptr_t page = address & ~(static_cast<uintptr_t>(page_size) - 1u);
+
+    FILE* f = fopen("/proc/self/maps", "re");
+    if (!f) return false;
+
+    char line[512] = {};
+    while (fgets(line, sizeof(line), f)) {
+        unsigned long long lo = 0, hi = 0;
+        char perms[8] = {};
+        if (sscanf(line, "%llx-%llx %7s", &lo, &hi, perms) != 3) continue;
+        if (page < static_cast<uintptr_t>(lo) || page >= static_cast<uintptr_t>(hi)) continue;
+
+        int prot = 0;
+        if (perms[0] == 'r') prot |= PROT_READ;
+        if (perms[1] == 'w') prot |= PROT_WRITE;
+        if (perms[2] == 'x') prot |= PROT_EXEC;
+        fclose(f);
+        *protection_out = prot;
+        return true;
+    }
+    fclose(f);
+    return false;
+}
+
+static bool address_matches_library(void* address, const char* basename) {
+    if (!address || !basename || !*basename) return false;
+    Dl_info info{};
+    if (dladdr(address, &info) == 0 || !info.dli_fname) return false;
+    return strcmp(path_basename(info.dli_fname), basename) == 0;
+}
+
+static bool candidate_original_is_valid(const GotPatchContext* ctx, void* current) {
+    if (!current) return false;
+    if (!ctx->expected_original && !ctx->expected_library_basename) return true;
+    if (ctx->expected_original && current == ctx->expected_original) return true;
+    if (ctx->expected_library_basename &&
+        address_matches_library(current, ctx->expected_library_basename)) {
+        return true;
+    }
+    return false;
+}
+
+static bool patch_one_got_slot(GotPatchContext* ctx,
+                               struct dl_phdr_info* info,
+                               const ElfW(Rela)& relocation) {
+    auto* got = reinterpret_cast<void**>(info->dlpi_addr + relocation.r_offset);
+    void* current = *got;
+
+    // A relocation can appear in more than one dynamic table on some builds.
+    // Never treat an already-patched slot as a fresh candidate.
+    if (current == ctx->replacement) return false;
+
+    if (!candidate_original_is_valid(ctx, current)) return false;
+
+    ctx->found_got = got;
+    ctx->found_original = current;
+    ctx->base = static_cast<uintptr_t>(info->dlpi_addr);
+    ctx->path = info->dlpi_name;
+
+    const char* base_name = path_basename(info->dlpi_name);
+    if (ctx->first_library_name.empty()) ctx->first_library_name = base_name;
+    if (ctx->first_library_path.empty() && info->dlpi_name) ctx->first_library_path = info->dlpi_name;
+
+    ++ctx->candidate_count;
+
+    const long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0) {
+        ++ctx->patch_failures;
+        ctx->error = "invalid_page_size";
+        return false;
+    }
+
+    const uintptr_t slot = reinterpret_cast<uintptr_t>(got);
+    const uintptr_t page = slot & ~(static_cast<uintptr_t>(page_size) - 1u);
+    int old_prot = 0;
+    if (!map_protection_for_address(slot, &old_prot)) {
+        ++ctx->patch_failures;
+        ctx->error = "got_mprotect_map_lookup_failed";
+        return false;
+    }
+    const int writable_prot = old_prot | PROT_WRITE;
+
+    if (mprotect(reinterpret_cast<void*>(page), static_cast<size_t>(page_size), writable_prot) != 0) {
+        ++ctx->patch_failures;
+        ctx->error = "got_mprotect_rw_failed";
+        return false;
+    }
+
+    __atomic_store_n(got, ctx->replacement, __ATOMIC_SEQ_CST);
+    __builtin___clear_cache(reinterpret_cast<char*>(got), reinterpret_cast<char*>(got) + sizeof(void*));
+    ctx->value_after_patch = *got;
+
+    // Restore the page's original protection so the resolver does not leave a
+    // RELRO GOT page writable for the lifetime of the target process.
+    if (mprotect(reinterpret_cast<void*>(page), static_cast<size_t>(page_size), old_prot) != 0) {
+        // The hook is still installed; record the protection-restore problem
+        // without turning a successful code patch into a false negative.
+        ++ctx->protection_restore_failures;
+        ctx->error = "got_mprotect_restore_failed";
+    }
+
+    if (ctx->value_after_patch != ctx->replacement) {
+        ++ctx->patch_failures;
+        ctx->error = "got_readback_mismatch";
+        return false;
+    }
+
+    if (ctx->original_out && !*ctx->original_out) {
+        *ctx->original_out = current;
+    }
+
+    ++ctx->patched_count;
+    ctx->success = true;
+    if (!ctx->error) ctx->error = "got_patch_ok";
+    return true;
+}
 
 static int patch_got_callback(struct dl_phdr_info* info, size_t, void* opaque) {
     auto* ctx = static_cast<GotPatchContext*>(opaque);
     const char* path = info->dlpi_name;
     if (!path || !*path) return 0;
-    const char* slash = strrchr(path, '/');
-    const char* base_name = slash ? slash + 1 : path;
-    if (strcmp(base_name, ctx->library_name) != 0) return 0;
+
+    const char* base_name = path_basename(path);
+    if (ctx->app_scope) {
+        if (!is_app_library_path(path)) return 0;
+    } else if (!ctx->library_name || strcmp(base_name, ctx->library_name) != 0) {
+        return 0;
+    }
 
     const ElfW(Phdr)* dynamic_phdr = nullptr;
     for (size_t i = 0; i < info->dlpi_phnum; ++i) {
@@ -2703,7 +2837,7 @@ static int patch_got_callback(struct dl_phdr_info* info, size_t, void* opaque) {
             break;
         }
     }
-    if (!dynamic_phdr) { ctx->error = "dynamic_missing"; return 1; }
+    if (!dynamic_phdr) return 0;
 
     auto* dyn = reinterpret_cast<const ElfW(Dyn)*>(info->dlpi_addr + dynamic_phdr->p_vaddr);
     const ElfW(Rela)* jmprel = nullptr;
@@ -2716,95 +2850,131 @@ static int patch_got_callback(struct dl_phdr_info* info, size_t, void* opaque) {
 
     for (const ElfW(Dyn)* d = dyn; d->d_tag != DT_NULL; ++d) {
         switch (d->d_tag) {
-            case DT_JMPREL: jmprel = reinterpret_cast<const ElfW(Rela)*>(info->dlpi_addr + d->d_un.d_ptr); break;
-            case DT_PLTRELSZ: jmprel_size = static_cast<size_t>(d->d_un.d_val); break;
-            case DT_PLTREL: plt_rel_type = d->d_un.d_val; break;
-            case DT_RELA: rela = reinterpret_cast<const ElfW(Rela)*>(info->dlpi_addr + d->d_un.d_ptr); break;
-            case DT_RELASZ: rela_size = static_cast<size_t>(d->d_un.d_val); break;
-            case DT_SYMTAB: symtab = reinterpret_cast<const ElfW(Sym)*>(info->dlpi_addr + d->d_un.d_ptr); break;
-            case DT_STRTAB: strtab = reinterpret_cast<const char*>(info->dlpi_addr + d->d_un.d_ptr); break;
-            default: break;
+            case DT_JMPREL:
+                jmprel = reinterpret_cast<const ElfW(Rela)*>(info->dlpi_addr + d->d_un.d_ptr);
+                break;
+            case DT_PLTRELSZ:
+                jmprel_size = static_cast<size_t>(d->d_un.d_val);
+                break;
+            case DT_PLTREL:
+                plt_rel_type = d->d_un.d_val;
+                break;
+            case DT_RELA:
+                rela = reinterpret_cast<const ElfW(Rela)*>(info->dlpi_addr + d->d_un.d_ptr);
+                break;
+            case DT_RELASZ:
+                rela_size = static_cast<size_t>(d->d_un.d_val);
+                break;
+            case DT_SYMTAB:
+                symtab = reinterpret_cast<const ElfW(Sym)*>(info->dlpi_addr + d->d_un.d_ptr);
+                break;
+            case DT_STRTAB:
+                strtab = reinterpret_cast<const char*>(info->dlpi_addr + d->d_un.d_ptr);
+                break;
+            default:
+                break;
         }
     }
-    if (!symtab || !strtab) { ctx->error = "symbol_tables_missing"; return 1; }
+    if (!symtab || !strtab) return 0;
 
     auto scan_relocations = [&](const ElfW(Rela)* entries, size_t bytes, bool plt) -> bool {
         if (!entries || !bytes) return false;
         if (plt && plt_rel_type != DT_RELA) return false;
+
         const size_t count = bytes / sizeof(ElfW(Rela));
         for (size_t i = 0; i < count; ++i) {
             const ElfW(Rela)& r = entries[i];
             const unsigned type = ELF64_R_TYPE(r.r_info);
             if (type != R_AARCH64_JUMP_SLOT && type != R_AARCH64_GLOB_DAT) continue;
+
             const size_t sym_index = ELF64_R_SYM(r.r_info);
             const char* name = strtab + symtab[sym_index].st_name;
             if (!name || strcmp(name, ctx->symbol_name) != 0) continue;
 
-            auto* got = reinterpret_cast<void**>(info->dlpi_addr + r.r_offset);
-            void* current = *got;
-            ctx->found_got = got;
-            ctx->found_original = current;
-            ctx->base = static_cast<uintptr_t>(info->dlpi_addr);
-            ctx->path = path;
-            const long page_size = sysconf(_SC_PAGESIZE);
-            if (page_size <= 0) { ctx->error = "invalid_page_size"; return true; }
-            uintptr_t page = reinterpret_cast<uintptr_t>(got) & ~(static_cast<uintptr_t>(page_size) - 1u);
-            if (mprotect(reinterpret_cast<void*>(page), static_cast<size_t>(page_size), PROT_READ | PROT_WRITE) != 0) {
-                ctx->error = "got_mprotect_rw_failed";
-                return true;
-            }
-            *got = ctx->replacement;
-            __builtin___clear_cache(reinterpret_cast<char*>(got), reinterpret_cast<char*>(got) + sizeof(void*));
-            ctx->value_after_patch = *got;
-            if (ctx->original_out) *ctx->original_out = current;
-            if (ctx->value_after_patch != ctx->replacement) {
-                ctx->error = "got_readback_mismatch";
-                return true;
-            }
-            ctx->success = true;
-            return true;
+            const bool patched = patch_one_got_slot(ctx, info, r);
+            if (patched && !ctx->patch_all) return true;
         }
         return false;
     };
 
     // PLT imports are checked first; some Android builds place function imports
     // in the general .rela.dyn table as GLOB_DAT instead of .rela.plt.
-    if (scan_relocations(jmprel, jmprel_size, true)) return 1;
-    if (scan_relocations(rela, rela_size, false)) return 1;
-    ctx->error = "symbol_relocation_not_found";
-    return 1;
+    scan_relocations(jmprel, jmprel_size, true);
+    scan_relocations(rela, rela_size, false);
+
+    return 0;
 }
 
-static bool install_manual_got_hook(std::string& detail, void** got_address, void** original, void** value_after_patch) {
+static bool install_manual_got_hook(std::string& detail,
+                                    void** got_address,
+                                    void** original,
+                                    void** value_after_patch,
+                                    void* resolved,
+                                    std::string* owner_name,
+                                    std::string* owner_path) {
     GotPatchContext ctx{};
-    ctx.library_name = "libunity.so";
+    ctx.library_name = nullptr;
+    ctx.app_scope = true;
     ctx.symbol_name = "eglSwapBuffers";
     ctx.replacement = reinterpret_cast<void*>(hooked_eglSwapBuffers);
     ctx.original_out = original;
+    ctx.expected_original = resolved;
+    ctx.expected_library_basename = "libEGL.so";
+    ctx.patch_all = true;
+
     dl_iterate_phdr(patch_got_callback, &ctx);
+
     if (got_address) *got_address = ctx.found_got;
     if (value_after_patch) *value_after_patch = ctx.value_after_patch;
-    if (!ctx.success) {
-        detail = ctx.error ? ctx.error : "unknown_patch_failure";
+    if (owner_name) *owner_name = ctx.first_library_name;
+    if (owner_path) *owner_path = ctx.first_library_path;
+
+    g_swap_owner_candidates = ctx.candidate_count;
+    g_swap_owner_patched = ctx.patched_count;
+    g_swap_owner_library = ctx.first_library_name;
+    g_swap_owner_path = ctx.first_library_path;
+
+    if (!ctx.success || !original || !*original) {
+        if (ctx.candidate_count > 0 && ctx.patched_count == 0 && !ctx.error) {
+            detail = "swap_relocations_present_but_not_resolved";
+        } else {
+            detail = ctx.error ? ctx.error : "symbol_relocation_not_found";
+        }
         return false;
     }
-    detail = ctx.error ? ctx.error : "got_patch_ok";
+
+    detail = ctx.protection_restore_failures > 0
+        ? "got_patch_ok_restore_protection_failed"
+        : "got_patch_ok";
     return true;
 }
 
-
-static bool install_gles_got_hook(const char* symbol, void* replacement, void** original,
-                                  void** got_address, std::string& detail) {
+static bool install_gles_got_hook(const char* symbol,
+                                  void* replacement,
+                                  void** original,
+                                  void** got_address,
+                                  std::string& detail) {
     GotPatchContext ctx{};
-    ctx.library_name = "libunity.so";
+    ctx.library_name = nullptr;
+    ctx.app_scope = true;
     ctx.symbol_name = symbol;
     ctx.replacement = replacement;
     ctx.original_out = original;
+    ctx.patch_all = true;
+
     dl_iterate_phdr(patch_got_callback, &ctx);
+
     if (got_address) *got_address = ctx.found_got;
-    detail = ctx.error ? ctx.error : (ctx.success ? "got_patch_ok" : "unknown_patch_failure");
+    if (ctx.success) {
+        detail = ctx.protection_restore_failures > 0
+            ? "got_patch_ok_restore_protection_failed"
+            : "got_patch_ok";
+    } else {
+        detail = ctx.error ? ctx.error : "symbol_relocation_not_found";
+    }
     return ctx.success && original && *original;
 }
+
 
 static void write_hook_report(const char* stage, const std::string& target_name,
                               const char* result, void* resolved, void* got_address,
@@ -2813,17 +2983,20 @@ static void write_hook_report(const char* stage, const std::string& target_name,
     if (g_app_files_dir.empty()) return;
     char path[512] = {};
     snprintf(path, sizeof(path), "%s/danzku_v257_%s_%d.txt", g_app_files_dir.c_str(), stage, (int)getpid());
-    dev_t dev = 0; ino_t ino = 0; std::string lib_path;
-    bool unity_identity = parse_map_identity("libunity.so", dev, ino, lib_path);
+
     char out[8192] = {};
     snprintf(out, sizeof(out),
         "stage=%s\npid=%d\nuid=%d\ntarget=%s\ncmdline=%s\nstatus_Name=%s\nstatus_Uid=%s\n"
-        "libunity=%s\nlibunity_path=%s\nunity_dev=%u:%u\nunity_inode=%llu\n"
+        "engine_library=%s\nengine_library_name=%s\nengine_library_path=%s\n"
+        "engine_library_candidates=%u\nengine_library_patched=%u\n"
         "resolved_eglSwapBuffers=%s\nhook_address=%s\noriginal_address=%s\ngot_address=%s\ngot_value_after_patch=%s\ngot_matches_hook=%s\nplt_result=%s\nhook_installed=%s\nhook_calls=%llu\n",
         stage, (int)getpid(), (int)getuid(), target_name.c_str(), read_cmdline().c_str(),
         status_field("Name:").c_str(), status_field("Uid:").c_str(),
-        unity_identity ? "YES" : "NO", lib_path.c_str(), major(dev), minor(dev),
-        (unsigned long long)ino, hex_ptr(resolved).c_str(),
+        g_swap_owner_library.empty() ? "NO" : "YES",
+        g_swap_owner_library.empty() ? "" : g_swap_owner_library.c_str(),
+        g_swap_owner_path.empty() ? "" : g_swap_owner_path.c_str(),
+        g_swap_owner_candidates, g_swap_owner_patched,
+        hex_ptr(resolved).c_str(),
         hex_ptr(reinterpret_cast<void*>(hooked_eglSwapBuffers)).c_str(),
         hex_ptr(original_address).c_str(), hex_ptr(got_address).c_str(),
         hex_ptr(got_value_after).c_str(),
@@ -2832,6 +3005,7 @@ static void write_hook_report(const char* stage, const std::string& target_name,
         (unsigned long long)g_hook_calls);
     write_file(path, out);
 }
+
 
 class DanzKuModule : public zygisk::ModuleBase {
 public:
@@ -2861,9 +3035,9 @@ public:
         if (!g_target) return;
         ensure_dir(g_app_files_dir);
         parse_v27_config();
-        // Enable the supersampling engine as early as possible - well before
-        // libunity.so is even loaded, let alone before it resolves its GLES
-        // function pointers. See sync_ss_options() above for why this matters.
+        // Enable the supersampling engine as early as possible - before the
+        // target application's renderer resolves its GLES function pointers.
+        // See sync_ss_options() above for why this matters.
         sync_ss_options();
         cleanup_danzku_files();
         char marker[512] = {};
@@ -2885,10 +3059,11 @@ public:
     static void* hook_worker(void*) {
         for (int attempt = 1; attempt <= 12; ++attempt) {
             usleep(500000);
-            bool unity = maps_has("libunity.so");
+
+            // The target-app whitelist has already passed in preAppSpecialize().
+            // We now discover whichever application ELF actually imports
+            // eglSwapBuffers. No package->library mapping is used.
             bool egl = maps_has("libEGL.so");
-            // Unity is no longer a hard requirement. The render hook can target
-            // any process that exposes the system EGL entry point.
             if (!egl) continue;
 
             void* handle = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
@@ -2900,10 +3075,15 @@ public:
             }
 
             std::string detail;
+            std::string owner_name;
+            std::string owner_path;
             void* got = nullptr;
             g_orig_eglSwapBuffers = nullptr;
             void* got_after = nullptr;
-            bool ok = install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after);
+            bool ok = install_manual_got_hook(detail, &got,
+                                              reinterpret_cast<void**>(&g_orig_eglSwapBuffers),
+                                              &got_after,
+                                              resolved, &owner_name, &owner_path);
             g_hook_installed = ok && g_orig_eglSwapBuffers != nullptr;
             if (g_hook_installed) {
                 std::string proc_detail, dlsym_detail;

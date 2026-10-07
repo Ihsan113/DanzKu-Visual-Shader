@@ -2674,6 +2674,12 @@ static void* hooked_dlsym(void* handle, const char* name) {
     return wrapper ? wrapper : sym;
 }
 
+static const char* hook_library_for_target(const std::string& target_name) {
+    const std::string package_name = base_package_name(target_name);
+    if (package_name == "com.miHoYo.GenshinImpact") return "libyuanshen.so";
+    return "libunity.so";
+}
+
 struct GotPatchContext {
     const char* library_name;
     const char* symbol_name;
@@ -2775,9 +2781,10 @@ static int patch_got_callback(struct dl_phdr_info* info, size_t, void* opaque) {
     return 1;
 }
 
-static bool install_manual_got_hook(std::string& detail, void** got_address, void** original, void** value_after_patch) {
+static bool install_manual_got_hook(const char* library_name, std::string& detail,
+                                      void** got_address, void** original, void** value_after_patch) {
     GotPatchContext ctx{};
-    ctx.library_name = "libunity.so";
+    ctx.library_name = library_name;
     ctx.symbol_name = "eglSwapBuffers";
     ctx.replacement = reinterpret_cast<void*>(hooked_eglSwapBuffers);
     ctx.original_out = original;
@@ -2793,10 +2800,11 @@ static bool install_manual_got_hook(std::string& detail, void** got_address, voi
 }
 
 
-static bool install_gles_got_hook(const char* symbol, void* replacement, void** original,
+static bool install_gles_got_hook(const char* library_name, const char* symbol,
+                                  void* replacement, void** original,
                                   void** got_address, std::string& detail) {
     GotPatchContext ctx{};
-    ctx.library_name = "libunity.so";
+    ctx.library_name = library_name;
     ctx.symbol_name = symbol;
     ctx.replacement = replacement;
     ctx.original_out = original;
@@ -2814,15 +2822,16 @@ static void write_hook_report(const char* stage, const std::string& target_name,
     char path[512] = {};
     snprintf(path, sizeof(path), "%s/danzku_v257_%s_%d.txt", g_app_files_dir.c_str(), stage, (int)getpid());
     dev_t dev = 0; ino_t ino = 0; std::string lib_path;
-    bool unity_identity = parse_map_identity("libunity.so", dev, ino, lib_path);
+    const char* engine_library = hook_library_for_target(target_name);
+    bool engine_identity = parse_map_identity(engine_library, dev, ino, lib_path);
     char out[8192] = {};
     snprintf(out, sizeof(out),
         "stage=%s\npid=%d\nuid=%d\ntarget=%s\ncmdline=%s\nstatus_Name=%s\nstatus_Uid=%s\n"
-        "libunity=%s\nlibunity_path=%s\nunity_dev=%u:%u\nunity_inode=%llu\n"
+        "engine_library=%s\nengine_library_path=%s\nengine_dev=%u:%u\nengine_inode=%llu\n"
         "resolved_eglSwapBuffers=%s\nhook_address=%s\noriginal_address=%s\ngot_address=%s\ngot_value_after_patch=%s\ngot_matches_hook=%s\nplt_result=%s\nhook_installed=%s\nhook_calls=%llu\n",
         stage, (int)getpid(), (int)getuid(), target_name.c_str(), read_cmdline().c_str(),
         status_field("Name:").c_str(), status_field("Uid:").c_str(),
-        unity_identity ? "YES" : "NO", lib_path.c_str(), major(dev), minor(dev),
+        engine_identity ? "YES" : "NO", lib_path.c_str(), major(dev), minor(dev),
         (unsigned long long)ino, hex_ptr(resolved).c_str(),
         hex_ptr(reinterpret_cast<void*>(hooked_eglSwapBuffers)).c_str(),
         hex_ptr(original_address).c_str(), hex_ptr(got_address).c_str(),
@@ -2861,9 +2870,10 @@ public:
         if (!g_target) return;
         ensure_dir(g_app_files_dir);
         parse_v27_config();
-        // Enable the supersampling engine as early as possible - well before
-        // libunity.so is even loaded, let alone before it resolves its GLES
-        // function pointers. See sync_ss_options() above for why this matters.
+        // Enable the supersampling engine as early as possible. The actual
+        // engine library is selected per target (for example libyuanshen.so
+        // for Genshin), and it may be loaded before it resolves
+        // its GLES function pointers. See sync_ss_options() above for why this matters.
         sync_ss_options();
         cleanup_danzku_files();
         char marker[512] = {};
@@ -2885,10 +2895,10 @@ public:
     static void* hook_worker(void*) {
         for (int attempt = 1; attempt <= 12; ++attempt) {
             usleep(500000);
-            bool unity = maps_has("libunity.so");
+            const char* hook_library = hook_library_for_target(g_target_name);
             bool egl = maps_has("libEGL.so");
-            // Unity is no longer a hard requirement. The render hook can target
-            // any process that exposes the system EGL entry point.
+            // The selected engine library is not required for EGL resolution,
+            // but it is the ELF import owner we patch for the target package.
             if (!egl) continue;
 
             void* handle = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
@@ -2903,7 +2913,8 @@ public:
             void* got = nullptr;
             g_orig_eglSwapBuffers = nullptr;
             void* got_after = nullptr;
-            bool ok = install_manual_got_hook(detail, &got, reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after);
+            bool ok = install_manual_got_hook(hook_library, detail, &got,
+                                              reinterpret_cast<void**>(&g_orig_eglSwapBuffers), &got_after);
             g_hook_installed = ok && g_orig_eglSwapBuffers != nullptr;
             if (g_hook_installed) {
                 std::string proc_detail, dlsym_detail;
@@ -2911,10 +2922,10 @@ public:
                 void* dlsym_got = nullptr;
                 g_orig_eglGetProcAddress = nullptr;
                 g_orig_dlsym = nullptr;
-                bool proc_ok = install_gles_got_hook("eglGetProcAddress",
+                bool proc_ok = install_gles_got_hook(hook_library, "eglGetProcAddress",
                     reinterpret_cast<void*>(hooked_eglGetProcAddress),
                     reinterpret_cast<void**>(&g_orig_eglGetProcAddress), &proc_got, proc_detail);
-                bool dlsym_ok = install_gles_got_hook("dlsym",
+                bool dlsym_ok = install_gles_got_hook(hook_library, "dlsym",
                     reinterpret_cast<void*>(hooked_dlsym),
                     reinterpret_cast<void**>(&g_orig_dlsym), &dlsym_got, dlsym_detail);
                 dz_ss::note_hook_install("eglGetProcAddress", proc_ok, proc_detail.c_str());

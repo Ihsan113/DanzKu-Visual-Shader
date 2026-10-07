@@ -152,6 +152,10 @@ if 'module/config/targets.conf' not in workflow:
     errors.append('build workflow does not package targets.conf')
 if 'TARGETS=' not in service_src or 'com.mobile.legends' not in service_src or 'com.dts.freefiremax' not in service_src:
     errors.append('service target bootstrap is missing')
+if 'com.miHoYo.GenshinImpact' not in targets_cfg or 'com.miHoYo.GenshinImpact' not in service_src:
+    errors.append('Genshin target bootstrap is missing')
+if 'package_name == "com.miHoYo.GenshinImpact"' not in src or 'return "libyuanshen.so"' not in src:
+    errors.append('Genshin native hook library mapping is missing')
 if 'return package_name == "com.mobile.legends"' in src:
     errors.append('native target filter still has hard-coded Mobile Legends fallback')
 if 'com.mobile.legends:UnityKillsMe' in src:
